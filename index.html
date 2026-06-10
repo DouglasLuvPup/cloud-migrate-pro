@@ -99,6 +99,7 @@ h1.title{font-size:clamp(2.6rem,6vw,4.4rem);line-height:1.04;letter-spacing:-.02
 .feat h4{font-size:1.12rem;font-weight:700;margin-bottom:8px;}
 .feat p{font-size:.95rem;color:var(--cp-text-muted);}
 .feat p b{color:var(--cp-text);}
+code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var(--cp-accent-soft);color:var(--cp-accent);padding:1px 6px;border-radius:5px;}
 
 /* CHAT */
 .chat-shell{position:relative;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:20px;padding:14px;box-shadow:var(--cp-shadow);max-width:900px;margin:0 auto;}
@@ -158,28 +159,28 @@ footer .v{color:var(--cp-text-muted);}
         <div class="ico">🏢</div>
         <div class="flow">2024 Playbook</div>
         <h3>On-Prem → SharePoint Online</h3>
-        <span class="route">on-prem SP sites &amp; MySites → SPO + OneDrive</span>
+        <span class="route">on-prem SharePoint Server &amp; MySites → SPO + OneDrive</span>
         <ul>
-          <li><b>Staging → cutover</b> — content is staged and verified before any source is touched; nothing goes live until it's confirmed intact.</li>
-          <li><b>SCA swap at cutover</b> — service account (svc-filemanager) is promoted and the end-user demoted automatically at go-live.</li>
-          <li><b>Retry engine</b> — re-runs failed items, detects 0-byte uploads, and verifies the target before removing the source.</li>
-          <li><b>Driver-list control plane</b> — every site's status tracked in a customer-owned SPO list.</li>
+          <li><b>Two flows, one playbook</b> — <code>Migration-OD2OD-SPO.ps1</code> (MySites → SPO OneDrive) and <code>Migration-SP2SPO.ps1</code> (on-prem sites → SPO sites); covers SharePoint 2013 → Subscription Edition.</li>
+          <li><b>SPMT-driven, list-controlled</b> — pulls rows marked <b>Ready</b> from a customer-owned SPO driver list, then Register / Add / Start-SPMTMigration with both SPO and on-prem admin credentials.</li>
+          <li><b>Multi-runner safe</b> — a per-row lock flag (Inprocess / Processing) lets several servers run at once without ever double-processing an item.</li>
+          <li><b>SCA swap at cutover</b> — promotes <b>svc-filemanager</b> to Site Collection Admin and demotes the migrated user; optional AD <i>wwwHomePage</i> redirect to the new OneDrive.</li>
         </ul>
-        <div class="tags"><span class="tag">Sites</span><span class="tag">MySites</span><span class="tag">Stage→Cutover</span></div>
+        <div class="tags"><span class="tag">SP Server</span><span class="tag">MySites</span><span class="tag">OD2OD + SP2SPO</span></div>
       </article>
 
       <article class="path">
         <div class="ico">🏠</div>
         <div class="flow">2025 Playbook</div>
         <h3>H: Drive → OneDrive</h3>
-        <span class="route">UNC \\server\users\&lt;sam&gt; → user's OneDrive</span>
+        <span class="route">UNC \\server\users\&lt;sam&gt; → OneDrive /Documents/HDrive</span>
         <ul>
-          <li><b>Auto-provisioning</b> — provisions each user's OneDrive, grants admin access, and stages with SPMT.</li>
-          <li><b>AD group flips on success</b> — REDIRECTION, SecFltr-*, and license groups are switched automatically when a migration completes.</li>
-          <li><b>Per-user FIFO queue</b> — priority bands order the rollout across thousands of users.</li>
-          <li><b>Postpone-by-date</b> — defer individual users who aren't ready, no manual tracking.</li>
+          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions via Request-SPOPersonalSite (3× backoff), then grants the migration service account.</li>
+          <li><b>AD group flips on success</b> — removes <b>SecFltr-USR-OneDrive</b>, adds <b>SecFltr-USR-Office365</b> + the license group; multi-group <i>RedirectGP</i> supported.</li>
+          <li><b>Postpone-by-date &amp; throttle-aware</b> — defer users by date (6 accepted spellings), DPAPI-cached creds, and SPO throttling auto-retry with backoff.</li>
+          <li><b>Source lockdown + reorg</b> — sets the H: source read-only in a background job and flattens <i>/My Documents</i> → <i>/Documents</i> after a verified move. Blocks <code>.pst</code>.</li>
         </ul>
-        <div class="tags"><span class="tag">Per-user</span><span class="tag">Home folders</span><span class="tag">AD-integrated</span></div>
+        <div class="tags"><span class="tag">Per-user</span><span class="tag">AD-integrated</span><span class="tag">Hdrive script v5.2</span></div>
       </article>
 
       <article class="path">
@@ -188,12 +189,12 @@ footer .v{color:var(--cp-text-muted);}
         <h3>Common Drive → Teams / SharePoint</h3>
         <span class="route">UNC shared drives → Teams channel or SPO site</span>
         <ul>
-          <li><b>Two target flows</b> — Flow A into a Teams channel (auto-provisioned via Graph) or Flow B straight into a SharePoint site.</li>
-          <li><b>Storage auto-downgrade</b> — fits the destination quota by trimming to the last 7 → 5 → 3 years of activity.</li>
-          <li><b>Timezone-aware scheduling</b> — off-hours windows per row: weekday nights, weekends, and US federal holidays.</li>
-          <li><b>Multi-server claim locking</b> — safe scale across 6+ worker servers with stale-claim auto-release.</li>
+          <li><b>Two target flows</b> — Flow A auto-provisions a Teams channel folder via Graph (two-phase <code>Update-MigrationTargets.v2.ps1</code>); Flow B goes straight into a SharePoint site.</li>
+          <li><b>Storage auto-downgrade</b> — <code>Invoke-UNCStorageScan</code> sizes 3/5/7-year footprints, then fits the destination quota by trimming 7 → 5 → 3 years (horizon stamped in YearUsed).</li>
+          <li><b>Timezone-aware scheduling</b> — per-row windows: weekday nights, weekends &amp; US federal holidays; rows ≥ 10 GB held to weekends unless ExtendedHours.</li>
+          <li><b>6+ server scale</b> — multi-server claim locking (ClaimedBy / ClaimedAt / stale-release); <code>Retry-FailedMigration</code> reprocesses failed items and 0-byte uploads.</li>
         </ul>
-        <div class="tags"><span class="tag">Flow A</span><span class="tag">Flow B</span><span class="tag">Massive scale</span></div>
+        <div class="tags"><span class="tag">Flow A</span><span class="tag">Flow B</span><span class="tag">CommonDriveMigration.v2</span></div>
       </article>
 
     </div>
@@ -215,8 +216,8 @@ footer .v{color:var(--cp-text-muted);}
       </div>
       <div class="feat">
         <div class="fi">🔐</div>
-        <h4>Fully auditable, no black boxes</h4>
-        <p>Every line is <b>PowerShell you can diff in git</b> — no opaque binaries. The control plane lives in a <b>customer-owned SharePoint list</b>, and <b>no data ever routes through a vendor cloud.</b></p>
+        <h4>Audit logging in every run</h4>
+        <p>Each script writes granular per-item status to a <b>customer-owned SharePoint driver list</b> — Migrate / Processing / Log / StartDate / CompletedDate plus <b>categorized failure codes</b> (LICENSE, UPN, PROVISIONING, ACCESS, THROTTLE). Per-file CSV reports (<code>ItemReport_R1</code>, <code>FailureSummaryReport</code>, <code>FatalError_*</code>) attach to each row so <b>every file is accounted for</b>, and flat-file logs forward cleanly to <b>Splunk / Sentinel / any SIEM</b>. Every line is <b>PowerShell you can diff in git</b> — no opaque binaries, no vendor cloud in the path.</p>
       </div>
       <div class="feat">
         <div class="fi">💸</div>
