@@ -100,6 +100,25 @@ h1.title{font-size:clamp(2.6rem,6vw,4.4rem);line-height:1.04;letter-spacing:-.02
 .feat p{font-size:.95rem;color:var(--cp-text-muted);}
 .feat p b{color:var(--cp-text);}
 code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var(--cp-accent-soft);color:var(--cp-accent);padding:1px 6px;border-radius:5px;}
+.topnav{position:sticky;top:0;z-index:50;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);}
+.navwrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:12px;}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.01em;color:var(--cp-text);font-size:1.02rem;}
+.brand .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--cp-accent),var(--cp-accent-hover));display:inline-block;}
+.navlinks{display:flex;gap:6px;flex-wrap:wrap;}
+.navlinks a{font-size:.92rem;font-weight:600;color:var(--cp-text-muted);text-decoration:none;padding:8px 14px;border-radius:8px;transition:background .15s,color .15s;}
+.navlinks a:hover{background:var(--cp-accent-soft);color:var(--cp-accent);}
+.navlinks a.cta{background:var(--cp-accent);color:var(--cp-accent-fg);}
+.navlinks a.cta:hover{background:var(--cp-accent-hover);color:var(--cp-accent-fg);}
+.dtabs{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-bottom:28px;}
+.dtab{font-size:.92rem;font-weight:600;font-family:inherit;cursor:pointer;padding:11px 20px;border-radius:999px;border:1px solid var(--cp-border);background:var(--cp-surface);color:var(--cp-text-muted);transition:all .15s;}
+.dtab:hover{border-color:var(--cp-accent);color:var(--cp-accent);transform:translateY(-2px);}
+.dtab.active{background:var(--cp-accent);color:var(--cp-accent-fg);border-color:var(--cp-accent);}
+.dpanel{display:none;}
+.dpanel.active{display:block;animation:rise .4s both;}
+.diagram-card{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:18px;padding:26px 20px;box-shadow:var(--cp-shadow);overflow-x:auto;}
+.diagram-card .mermaid{display:flex;justify-content:center;min-height:120px;}
+.dcap{text-align:center;color:var(--cp-text-soft);font-size:.88rem;margin-top:16px;font-family:Consolas,"Courier New",monospace;}
+@media (max-width:620px){.navlinks a{padding:7px 10px;font-size:.85rem;}.brand span{display:none;}}
 
 /* CHAT */
 .chat-shell{position:relative;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:20px;padding:14px;box-shadow:var(--cp-shadow);max-width:900px;margin:0 auto;}
@@ -124,6 +143,17 @@ footer .v{color:var(--cp-text-muted);}
 </style>
 </head>
 <body>
+
+<nav class="topnav">
+  <div class="wrap navwrap">
+    <span class="brand"><span class="logo"></span><span>Cloud Migrate Pro</span></span>
+    <div class="navlinks">
+      <a href="#paths">Playbooks</a>
+      <a class="cta" href="#diagrams">📊 Flow Diagrams</a>
+      <a href="#concierge">Concierge</a>
+    </div>
+  </div>
+</nav>
 
 <header class="hero">
   <div class="hero-bg"></div>
@@ -164,7 +194,7 @@ footer .v{color:var(--cp-text-muted);}
           <li><b>Two flows, one playbook</b> — <code>Migration-OD2OD-SPO.ps1</code> (MySites → SPO OneDrive) and <code>Migration-SP2SPO.ps1</code> (on-prem sites → SPO sites); covers SharePoint 2013 → Subscription Edition.</li>
           <li><b>SPMT-driven, list-controlled</b> — pulls rows marked <b>Ready</b> from a customer-owned SPO driver list, then Register / Add / Start-SPMTMigration with both SPO and on-prem admin credentials.</li>
           <li><b>Multi-runner safe</b> — a per-row lock flag (Inprocess / Processing) lets several servers run at once without ever double-processing an item.</li>
-          <li><b>SCA swap at cutover</b> — promotes <b>svc-filemanager</b> to Site Collection Admin and demotes the migrated user; optional AD <i>wwwHomePage</i> redirect to the new OneDrive.</li>
+          <li><b>SCA swap at cutover</b> — promotes a <b>dedicated migration service account</b> to Site Collection Admin and demotes the migrated user; optional AD <i>wwwHomePage</i> redirect to the new OneDrive.</li>
         </ul>
         <div class="tags"><span class="tag">SP Server</span><span class="tag">MySites</span><span class="tag">OD2OD + SP2SPO</span></div>
       </article>
@@ -175,7 +205,7 @@ footer .v{color:var(--cp-text-muted);}
         <h3>H: Drive → OneDrive</h3>
         <span class="route">UNC \\server\users\&lt;sam&gt; → OneDrive /Documents/HDrive</span>
         <ul>
-          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions via Request-SPOPersonalSite (3× backoff), then grants the migration service account.</li>
+          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions via Request-SPOPersonalSite (3× backoff), then grants a dedicated migration service account.</li>
           <li><b>AD group flips on success</b> — removes <b>SecFltr-USR-OneDrive</b>, adds <b>SecFltr-USR-Office365</b> + the license group; multi-group <i>RedirectGP</i> supported.</li>
           <li><b>Postpone-by-date &amp; throttle-aware</b> — defer users by date (6 accepted spellings), DPAPI-cached creds, and SPO throttling auto-retry with backoff.</li>
           <li><b>Source lockdown + reorg</b> — sets the H: source read-only in a background job and flattens <i>/My Documents</i> → <i>/Documents</i> after a verified move. Blocks <code>.pst</code>.</li>
@@ -228,6 +258,88 @@ footer .v{color:var(--cp-text-muted);}
   </div>
 </section>
 
+<section class="section alt" id="diagrams">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Under the Hood</div>
+      <h2>Flow diagrams for every playbook</h2>
+      <p>The exact, script-accurate workflow each specialist runs — pick a playbook to see how it moves your data, step by step.</p>
+    </div>
+    <div class="dtabs">
+      <button class="dtab active" onclick="showDiagram('d-onprem',this)">🏢 On-Prem → SPO</button>
+      <button class="dtab" onclick="showDiagram('d-hdrive',this)">🏠 H: Drive → OneDrive</button>
+      <button class="dtab" onclick="showDiagram('d-common',this)">📁 Common Drive → Teams / SP</button>
+    </div>
+
+    <div id="d-onprem" class="dpanel active">
+      <div class="diagram-card">
+        <pre class="mermaid">
+flowchart TD
+  A["Bootstrap modules + SPMT DLLs"] --> B["Get-Credential: SPO admin + on-prem admin"]
+  B --> C[("SPO driver list: SPOMigrationStatus")]
+  C --> D["Read rows where Migrate = Ready"]
+  D --> E{"For each site"}
+  E --> F["Lock row = Processing"]
+  F --> G["Register-SPMTMigration"]
+  G --> H["Add-SPMTTask: site to SPO, MigrateAll"]
+  H --> I["Start-SPMTMigration + watch status"]
+  I --> J{"Result"}
+  J -->|Success| K["Migrate = Migrated + Log path"]
+  J -->|Per-file errors| L["ErrorLog + FailureSummaryReport.csv"]
+  J -->|Hard failure| M["Failed"]
+  K --> N["Power Automate flow emails the user"]
+        </pre>
+      </div>
+      <p class="dcap">On-Prem SharePoint site → SharePoint Online · Migration-SP2SPO.ps1</p>
+    </div>
+
+    <div id="d-hdrive" class="dpanel">
+      <div class="diagram-card">
+        <pre class="mermaid">
+flowchart TD
+  A["Bootstrap modules + long-path keys"] --> B["Get-Credential to DPAPI cache"]
+  B --> C["Pick user CSV"]
+  C --> D{"For each user"}
+  D --> E{"Postpone date in future?"}
+  E -->|Yes| D
+  E -->|No| F["Resolve SAM to UPN to OneDrive URL"]
+  F --> G["Provision OneDrive, 3x backoff"]
+  G --> H["Grant migration service account"]
+  H --> I["Set Processing + record server"]
+  I --> J["SPMT to /Documents/HDrive, blocks .pst"]
+  J --> K{"Result"}
+  K -->|Success| L["Migrated + reorg My Documents to Documents"]
+  L --> M["AD group flips: remove OneDrive, add Office365 + license"]
+  M --> N["Set source read-only, background job"]
+  K -->|Per-file errors| O["ErrorLog / FatalError / ScriptError category"]
+  K -->|Hard failure| P["Failed, retries next run"]
+        </pre>
+      </div>
+      <p class="dcap">Network H: home drive → user OneDrive · Hdrive-OneDriveScript v5.2</p>
+    </div>
+
+    <div id="d-common" class="dpanel">
+      <div class="diagram-card">
+        <pre class="mermaid">
+flowchart TD
+  A["Import-MigrationSources, rows Migrate = blank"] --> B[("SPO list: CommonDriveMigration")]
+  B --> C["Invoke-UNCStorageScan: size 3 / 5 / 7 yr"]
+  C --> D["Update-MigrationTargets PHASE 1: Graph resolve Team + channel, provision folder"]
+  D --> E["Update-MigrationTargets PHASE 2: quota check + auto-downgrade 7 to 5 to 3 yr"]
+  E --> F{"Scheduling window open?"}
+  F -->|No, wait| F
+  F -->|Yes| G["Claim row: ClaimedBy / ClaimedAt"]
+  G --> H["SPMT-Worker.v2: UNC to Teams channel folder"]
+  H --> I{"Result"}
+  I -->|Success| J["Migrated"]
+  I -->|Failed items| K["Retry-FailedMigration: ItemReport + 0-byte check"]
+        </pre>
+      </div>
+      <p class="dcap">Common Drive → Teams channel (Flow A) · CommonDriveMigration.v2.ps1</p>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="concierge">
   <div class="wrap">
     <div class="section-head">
@@ -254,6 +366,26 @@ footer .v{color:var(--cp-text-muted);}
     <p>SharePoint · OneDrive · Common Drive migrations · IL5 / IL6 · Commercial-ready</p>
   </div>
 </footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  (() => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    if (window.mermaid) {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: dark ? 'dark' : 'neutral',
+        themeVariables: { fontFamily: '"Segoe UI", sans-serif', primaryColor: dark ? '#1a2733' : '#eef3f9', primaryBorderColor: '#0f6cbd', lineColor: dark ? '#9fb1c6' : '#516079' }
+      });
+    }
+  })();
+  function showDiagram(id, btn) {
+    document.querySelectorAll('.dpanel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.dtab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    btn.classList.add('active');
+  }
+</script>
 
 </body>
 </html>
