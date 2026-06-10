@@ -103,7 +103,8 @@ code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var
 .topnav{position:sticky;top:0;z-index:50;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);}
 .navwrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:12px;}
 .brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.01em;color:var(--cp-text);font-size:1.02rem;}
-.brand .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--cp-accent),var(--cp-accent-hover));display:inline-block;}
+.brand .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--cp-accent),var(--cp-accent-hover));display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 8px var(--cp-highlight);}
+.brand .logo svg{width:17px;height:17px;}
 .navlinks{display:flex;gap:6px;flex-wrap:wrap;}
 .navlinks a{font-size:.92rem;font-weight:600;color:var(--cp-text-muted);text-decoration:none;padding:8px 14px;border-radius:8px;transition:background .15s,color .15s;}
 .navlinks a:hover{background:var(--cp-accent-soft);color:var(--cp-accent);}
@@ -146,11 +147,11 @@ footer .v{color:var(--cp-text-muted);}
 
 <nav class="topnav">
   <div class="wrap navwrap">
-    <span class="brand"><span class="logo"></span><span>Cloud Migrate Pro</span></span>
+    <span class="brand"><span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8.5" width="16" height="11" rx="3"/><path d="M12 8.5V4.5"/><circle cx="12" cy="3.2" r="1.2" fill="#fff" stroke="none"/><circle cx="9.2" cy="13.5" r="1.3" fill="#fff" stroke="none"/><circle cx="14.8" cy="13.5" r="1.3" fill="#fff" stroke="none"/><path d="M2.5 13v2.5M21.5 13v2.5"/></svg></span><span>Cloud Migrate Pro</span></span>
     <div class="navlinks">
       <a href="#paths">Playbooks</a>
       <a class="cta" href="#diagrams">📊 Flow Diagrams</a>
-      <a href="#concierge">Concierge</a>
+      <a href="#concierge">AI Concierge</a>
     </div>
   </div>
 </nav>
@@ -297,22 +298,22 @@ flowchart TD
       <div class="diagram-card">
         <pre class="mermaid">
 flowchart TD
-  A["Bootstrap modules + long-path keys"] --> B["Get-Credential to DPAPI cache"]
+  A["Bootstrap modules and long-path keys"] --> B["Get-Credential to DPAPI cache"]
   B --> C["Pick user CSV"]
   C --> D{"For each user"}
-  D --> E{"Postpone date in future?"}
+  D --> E{"Postpone date in future"}
   E -->|Yes| D
   E -->|No| F["Resolve SAM to UPN to OneDrive URL"]
-  F --> G["Provision OneDrive, 3x backoff"]
+  F --> G["Provision OneDrive with 3x backoff"]
   G --> H["Grant migration service account"]
-  H --> I["Set Processing + record server"]
-  I --> J["SPMT to /Documents/HDrive, blocks .pst"]
+  H --> I["Set Processing and record server"]
+  I --> J["SPMT to OneDrive HDrive folder and block pst"]
   J --> K{"Result"}
-  K -->|Success| L["Migrated + reorg My Documents to Documents"]
-  L --> M["AD group flips: remove OneDrive, add Office365 + license"]
-  M --> N["Set source read-only, background job"]
-  K -->|Per-file errors| O["ErrorLog / FatalError / ScriptError category"]
-  K -->|Hard failure| P["Failed, retries next run"]
+  K -->|Success| L["Migrated and reorg to Documents"]
+  L --> M["AD group flips remove OneDrive add Office365 and license"]
+  M --> N["Set source read-only background job"]
+  K -->|Errors| O["ErrorLog and FatalError and ScriptError category"]
+  K -->|Failure| P["Failed retries next run"]
         </pre>
       </div>
       <p class="dcap">Network H: home drive → user OneDrive · Hdrive-OneDriveScript v5.2</p>
@@ -322,17 +323,18 @@ flowchart TD
       <div class="diagram-card">
         <pre class="mermaid">
 flowchart TD
-  A["Import-MigrationSources, rows Migrate = blank"] --> B[("SPO list: CommonDriveMigration")]
-  B --> C["Invoke-UNCStorageScan: size 3 / 5 / 7 yr"]
-  C --> D["Update-MigrationTargets PHASE 1: Graph resolve Team + channel, provision folder"]
-  D --> E["Update-MigrationTargets PHASE 2: quota check + auto-downgrade 7 to 5 to 3 yr"]
-  E --> F{"Scheduling window open?"}
-  F -->|No, wait| F
-  F -->|Yes| G["Claim row: ClaimedBy / ClaimedAt"]
-  G --> H["SPMT-Worker.v2: UNC to Teams channel folder"]
+  A["Import-MigrationSources rows Migrate blank"] --> B[("SPO list CommonDriveMigration")]
+  B --> C["Invoke-UNCStorageScan size 3 5 7 yr"]
+  C --> D["Update-MigrationTargets Phase 1 Graph resolve Team and channel and provision folder"]
+  D --> E["Update-MigrationTargets Phase 2 quota check and auto-downgrade 7 to 5 to 3 yr"]
+  E --> F{"Scheduling window open"}
+  F -->|No| W["Wait for window"]
+  W --> F
+  F -->|Yes| G["Claim row ClaimedBy and ClaimedAt"]
+  G --> H["SPMT-Worker v2 UNC to Teams channel folder"]
   H --> I{"Result"}
   I -->|Success| J["Migrated"]
-  I -->|Failed items| K["Retry-FailedMigration: ItemReport + 0-byte check"]
+  I -->|Failed items| K["Retry-FailedMigration ItemReport and zero-byte check"]
         </pre>
       </div>
       <p class="dcap">Common Drive → Teams channel (Flow A) · CommonDriveMigration.v2.ps1</p>
