@@ -302,7 +302,7 @@ flowchart TD
   B --> C["Pick user CSV"]
   C --> D{"For each user"}
   D --> E{"Postpone date in future"}
-  E -->|Yes| D
+  E -->|Yes| S["Skip user, retry next run"]
   E -->|No| F["Resolve SAM to UPN to OneDrive URL"]
   F --> G["Provision OneDrive with 3x backoff"]
   G --> H["Grant migration service account"]
@@ -328,8 +328,7 @@ flowchart TD
   C --> D["Update-MigrationTargets Phase 1 Graph resolve Team and channel and provision folder"]
   D --> E["Update-MigrationTargets Phase 2 quota check and auto-downgrade 7 to 5 to 3 yr"]
   E --> F{"Scheduling window open"}
-  F -->|No| W["Wait for window"]
-  W --> F
+  F -->|No| W["Wait for next window"]
   F -->|Yes| G["Claim row ClaimedBy and ClaimedAt"]
   G --> H["SPMT-Worker v2 UNC to Teams channel folder"]
   H --> I{"Result"}
