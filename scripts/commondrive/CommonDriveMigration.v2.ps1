@@ -1,0 +1,5020 @@
+<# 05/12/26a
+.SYNOPSIS
+Common Drive Migration Tool - Solution for migrating file shares to SharePoint Online document libraries with date filtering and throttling protection.
+This script is based on the Home Drive Migration script, however they are not interchangeable.
+
+.DESCRIPTION
+This comprehensive enterprise migration tool automates the transition from on-premises common/shared file shares to SharePoint Online document libraries.
+It provides tracking through SharePoint lists, robust throttling protection, and date-based content filtering.
+
+Key features:
+- Multi-phase migration workflow:
+  * Stage phase: Initial content copy for validation
+  * Migration phase: Final content copy with post-migration actions
+  * Credential management with stored credentials and reset options
+- Multiple data source options:
+  * CSV file-based selection with target URL validation
+  * Direct SharePoint list integration for centralized tracking with pagination
+- Storage capacity pre-flight check:
+  * Compares Size7YrMB, Size5YrMB, Size3YrMB against target StorageAvailable
+  * Automatically downgrades from 7yr → 5yr → 3yr if needed to fit available storage
+  * Sets YearUsed column to track which year cutoff was actually used (7, 5, or 3)
+  * Fails with "Failed" status if even 3yr data exceeds available storage
+  * Logs downgrade reasons to ScriptError field for visibility
+  * Applies 10% buffer to size calculations for overhead safety
+- Date-based content filtering:
+  * Configurable cutoff date via $YearsToMigrate (3, 5, 7 years)
+  * Set $YearsToMigrate = 0 to migrate ALL files (no date filter)
+  * Uses JSON-based SPMT task definition for filtering
+  * Only migrates content modified after cutoff date (when enabled)
+- Post-migration actions (only after confirmed success):
+  * Source folder ACL modification to read-only (Reacl) - Common Drive specific:
+    - Breaks inheritance on migrated folder
+    - Finds groups with "USER" in name and "Creator Owner"
+    - Changes them from FullControl/Modify to ReadAndExecute
+    - Applies recursively to subfolder structure
+    - Updates SPO list "Reacl" column to "Updated" or "Failed"
+  * Automatic source file deletion in NEW WINDOW (reads ItemReport, deletes only 'Migrated' files)
+  * DeletionReport.csv creation and attachment to SPO list item
+  * Prevents users from accessing/modifying migrated content at source
+- Complete SharePoint Migration Tool (SPMT) integration:
+  * JSON-based task definitions for advanced filtering
+  * Configurable blocked file extensions (pst, ds_store, tmp, temp)
+  * Filtered items logged to FailureSummaryReport2.csv (not ScriptError field)
+  * Detailed migration reporting and error logging
+  * SPMT session cleanup and management
+  * Runs in separate process to avoid excessesive reconnections
+- Enterprise-ready features:
+  * USSec/IL6 environment support (.scloud URLs)
+  * Support for App-Only authentication (scheduled task / unattended)
+  * Auto-grant service account Site Collection Admin on target sites
+  * Support for postponed migrations via date tracking
+  * Error capture with detailed categorization
+  * Secure credential management with local caching
+  * Target URL validation (must be contoso.spo.microsoft.scloud)
+  * Robust error handling and connection management
+  * Registry optimization for long path support
+  * Detailed transcript logging with timestamps
+  * Server name tracking for distributed operations
+  * Debug mode ($DebugMode) for verbose output when troubleshooting
+- SharePoint Online Throttling Protection:
+  * Exponential backoff retry mechanism
+  * Multi-level throttling detection
+  * Operation-specific retry counters
+
+Migration Workflow:
+1. Users choose migration operation type and data source through an interactive menu
+2. Tool validates target URLs match required domain
+3. Service account automatically granted Site Collection Admin on target site
+4. SharePoint Migration Tool (SPMT) executes with JSON-based date filtering
+5. Migration errors are captured, categorized, and consolidated into reports
+6. Only after confirmed success: Reacl (read-only) and DeleteSource actions execute
+7. Migration status is updated in SharePoint tracking list
+8. Detailed logging is maintained for auditing and troubleshooting
+
+Status Tracking:
+- Stage: Initial staging marked for processing
+- Staged: Successfully completed staging with no errors
+- StagedWithErrors: Completed staging with documented errors
+- Migrate: Final migration marked for processing
+- Migrated: Successfully completed migration with no errors
+- MigratedWithErrors: Completed migration with documented errors
+- Failed: Migration failed
+- Processing: Currently being processed
+
+.PARAMETER AutoRun
+When specified, runs in unattended mode for scheduled tasks. Processes items based on -MigrationType:
+- Stage: picks up items where Migrate='Stage'
+- Migrate (default): picks up items where Migrate='Migrate'
+NOTE: 'Staged' and 'StagedWithErrors' are RESULTS, not triggers. User must set to 'Migrate' to proceed.
+
+.PARAMETER MaxItems
+Maximum number of items to process per execution. Default is controlled by $MaxItemsDefault config variable.
+Useful for distributing work across multiple servers and preventing one instance from hogging all items.
+Set to 0 for unlimited (process all available items).
+
+.PARAMETER MigrationType
+Specifies which migration phase to execute in AutoRun mode. Default is "Both".
+- Stage: Process items where Migrate column = "Stage"
+- Migrate: Process items where Migrate column = "Migrate"
+  NOTE: "Staged" and "StagedWithErrors" are RESULTS - user must set to "Migrate" to proceed
+- MigrateOnly: Same as Migrate (kept for backwards compatibility)
+- Both: Process items where Migrate = "Stage" OR "Migrate" (recommended for scheduled tasks)
+
+.PARAMETER Continuous
+When specified with -AutoRun, loops continuously processing items until no more items remain
+or -MaxRuntime is reached. After processing each batch, checks for more items and continues.
+Useful for weekend migration windows where you want servers to keep working until done.
+
+.PARAMETER MaxRuntime
+Maximum hours to run before self-terminating. Default is 24 hours.
+Only applies when -Continuous is enabled. Set to 0 for unlimited runtime.
+
+.PARAMETER AppClientIdParam
+Override the default AppClientId for multi-instance support. Use this when running multiple
+scheduled tasks on the same server with different App Registrations to spread throttle limits.
+Each task passes a different AppClientId to avoid sharing the same API throttle bucket.
+
+.PARAMETER AppCertThumbprintParam
+Override the default AppCertificateThumbprint for multi-instance support. Use with -AppClientIdParam
+when running multiple scheduled tasks with different App Registrations. Each App Registration
+has its own certificate thumbprint.
+
+.PARAMETER UseScheduling
+Enables per-item timezone-based migration scheduling. When enabled:
+- Each list item's TimeZone column determines when it can be processed
+- Blocked hours: Weekdays 6 AM - 5 PM in the item's local timezone
+- Allowed hours: Weekdays 5 PM - 6 AM, all day weekends, all day holidays
+- Items are sorted by Priority (ASC: 1=highest) then QueuedAt (ASC: FIFO) BEFORE claiming
+- QueuedAt fallback: If blank, uses Modified date (when user set Migrate status) for FIFO ordering
+- QueuedAt is auto-stamped when an item is first picked up for processing
+- Items with ExtendedHours=Yes can run 24/7 regardless of timezone
+- Items with TimeZone=ANYTIME can run 24/7
+- Federal holidays are pre-configured in the script ($HolidayDates array)
+Required SPO columns: TimeZone (Choice), QueuedAt (DateTime), Priority (Number), ExtendedHours (Yes/No)
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1
+# Run the script interactively and follow prompts to select migration type and source
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun
+# Processes items where Migrate = "Migrate" only (default MigrationType)
+# "Staged" and "StagedWithErrors" are RESULTS - user must set to "Migrate" to proceed
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MaxItems 5
+# Process only 5 items this execution (useful for testing or slow migrations)
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MaxItems 0
+# Process all available items (no limit)
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType Stage
+# Picks up items where Migrate column = "Stage"
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType Migrate
+# Picks up items where Migrate column = "Migrate" only
+# "Staged" and "StagedWithErrors" are results - user must set to "Migrate" to proceed
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType Stage -MaxItems 5
+# Process only 5 Stage items per execution
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType MigrateOnly -MaxItems 5
+# Same as -MigrationType Migrate (picks up "Migrate" only, kept for backwards compatibility)
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType MigrateOnly -MaxItems 1 -Continuous -MaxRuntime 61
+# Process 1 item at a time, continuously, for up to 61 hours (weekend migration)
+# Ideal for 6 servers running in parallel - each grabs 1 item, processes, repeats
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType Stage -MaxItems 1 -Continuous -MaxRuntime 24
+# Continuous staging for up to 24 hours - 1 item at a time
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MaxItems 5 -AppClientIdParam "abc-123-def-456" -AppCertThumbprintParam "AABBCCDD..."
+# Run with a specific App Registration (for multi-instance scheduled tasks)
+# Set up 3 tasks with different AppClientIds/thumbprints to spread API throttle limits
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MigrationType Migrate -MaxItems 1 -Continuous -UseScheduling
+# Timezone-based scheduling: only processes items during their allowed migration windows
+# Items blocked during business hours (6 AM - 5 PM local) based on their TimeZone column
+# Scheduled task runs every 15 minutes; processes in-window items, exits when all blocked
+
+.EXAMPLE
+.\CommonDriveMigration_v1.ps1 -AutoRun -MaxItems 1 -Continuous -UseScheduling
+# RECOMMENDED: Default MigrationType=Both picks up Stage AND Migrate items
+# Processes items with TimeZone=ANYTIME or ExtendedHours=Yes 24/7
+# Others only during their allowed migration windows (evenings/weekends)
+
+.NOTES
+Version: 3.2
+Created: January 06, 2026
+Updated: May 12, 2026
+Author: Douglas Cox [Microsoft CSA]
+Requirements:
+- PowerShell 5.1
+- SharePoint Online Management Shell
+- SharePoint Migration Tool (SPMT 4.2.129.0+)
+- PnP.PowerShell module 1.12
+
+Required SPO List Columns for Storage Capacity Check:
+- Size7YrMB (Number): UNC scan result - size of files modified in last 7 years
+- Size5YrMB (Number): UNC scan result - size of files modified in last 5 years
+- Size3YrMB (Number): UNC scan result - size of files modified in last 3 years
+- StorageAvailable (Number): Target site available storage in MB (from Update-MigrationTargets.v2.ps1)
+- YearUsed (Number): Set by script - actual year cutoff used (7, 5, or 3)
+
+For scheduled tasks:
+- Set $UseAppAuth = $true
+- Configure App Registration values (ClientId, TenantId, Thumbprint)
+- Import certificate to Cert:\LocalMachine\My
+- Run: .\CommonDriveMigration_v1.ps1 -AutoRun
+
+Debug Mode:
+- Set $DebugMode = $true at top of script to see verbose connection/processing output
+- Default is $false for clean output showing only essential information
+
+This script should be run with administrative privileges to ensure proper 
+access to file shares.
+
+.LINK
+Internal Documentation: TBD
+#>
+
+param(
+    [switch]$AutoRun,  # For scheduled task - skips menu, processes all eligible items
+    [int]$MaxItems = -1,  # -1 means use default from config; 0 = unlimited
+    [ValidateSet("Stage", "Migrate", "MigrateOnly", "Both")]
+    [string]$MigrationType = "Both",  # Which phase to run in AutoRun mode
+    [switch]$Continuous,  # Loop until no items remain or MaxRuntime reached
+    [int]$MaxRuntime = 24,  # Max hours to run in Continuous mode (0 = unlimited)
+    [switch]$UseSavedCreds,  # Use saved XML credentials instead of App Registration
+    [string]$AppClientIdParam = "",  # Override AppClientId for multi-instance support
+    [string]$AppCertThumbprintParam = "",  # Override AppCertificateThumbprint for multi-instance support
+    [switch]$UseScheduling  # Enable per-item timezone-based scheduling windows
+)
+
+$toolversion = "2.7"
+
+# ===== DEBUG MODE =====
+# Set to $true to see verbose connection/processing details
+# Set to $false for clean output (only essential info)
+$DebugMode = $false
+
+# Helper function for debug output
+function Write-Debug-Message {
+    param([string]$Message, [string]$Color = "Gray")
+    if ($DebugMode) {
+        Write-Host $Message -ForegroundColor $Color
+    }
+}
+
+# Display Windows identity running the script
+$windowsIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Host "Script running as Windows identity: $windowsIdentity" -ForegroundColor Cyan
+
+#region ===== CONFIGURATION - MODIFY THESE VALUES AS NEEDED =====
+
+# ===== DATE CUTOFF CONFIGURATION =====
+# Set the number of years to look back for content
+# Only files modified AFTER this date will be migrated
+# Set to 0 to migrate ALL files regardless of age (no date filter)
+$YearsToMigrate = 7  # 0 = all files, 3/5/7 = years cutoff
+if ($YearsToMigrate -eq 0) {
+    $DateCutoff = $null
+    Write-Host "Date cutoff: DISABLED - migrating ALL files regardless of age" -ForegroundColor Cyan
+} else {
+    $DateCutoff = (Get-Date).AddYears(-$YearsToMigrate).ToString("yyyy-MM-dd")
+    Write-Host "Date cutoff configured: Only migrating content modified after $DateCutoff ($YearsToMigrate years)" -ForegroundColor Cyan
+}
+
+# ===== REQUIRED TARGET URL PREFIX =====
+$RequiredTargetUrlPrefix = "https://contoso.spo.microsoft.scloud/"
+
+# ===== SITE URLs AND CONFIGURATION =====
+$siteUrl = "https://contoso.spo.microsoft.scloud/sites/000001"
+$adminUrl = "https://contoso-admin.spo.microsoft.scloud/"
+$listName = "CommonMigrationStatus"
+
+# Location for CSV files
+$MigrationCSVLists = "F:\Migration-Common-Lists"
+
+# Domain
+$domain = "@contoso.gov"
+
+# Blocked file extensions for migration (as array for SPMT)
+$BlockedExtensions = @("pst", "ds_store", "tmp", "temp")
+
+# Working folder for SPMT logs
+$LoggingSharePointMigration = "F:\SPMTLOGS"
+
+# Define credential path - use fixed path that works for both interactive and scheduled task (SYSTEM) contexts
+# Note: Credential file must be created/copied to this location
+$CredentialPath = "F:\Scripts\SPMTCred.xml"
+$SPOCredential = $null
+
+# ACL Temp Dir
+$TempPath = "F:\Reacl-Delete-Logs"
+if (-not (Test-Path $TempPath)) {
+    New-Item -Path $TempPath -ItemType Directory -Force | Out-Null
+}
+
+# Cleanup old temp files at startup
+function Invoke-TempFileCleanup {
+    $cleanupTimestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$cleanupTimestamp] CLEANUP: Cleaning up old temp files..." -ForegroundColor Gray
+    
+    $oneDayAgo = (Get-Date).AddDays(-1)
+    $sevenDaysAgo = (Get-Date).AddDays(-7)
+    $cleaned = 0
+    
+    # F:\Reacl-Delete-Logs\*.ps1 - Delete after 1 day (not needed after execution)
+    Get-ChildItem -Path $TempPath -Filter "*.ps1" -File -ErrorAction SilentlyContinue | 
+        Where-Object { $_.LastWriteTime -lt $oneDayAgo } | 
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; $cleaned++ }
+    
+    # F:\SPMTLOGS\MigrationTargets\*.log - Delete after 7 days
+    $migrationTargetsLogPath = "F:\SPMTLOGS\MigrationTargets"
+    if (Test-Path $migrationTargetsLogPath) {
+        Get-ChildItem -Path $migrationTargetsLogPath -Filter "*.log" -File -ErrorAction SilentlyContinue | 
+            Where-Object { $_.LastWriteTime -lt $sevenDaysAgo } | 
+            ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; $cleaned++ }
+    }
+    
+    # $env:TEMP\SourceDeletion_*.status - Delete after 1 day (legacy/unused)
+    Get-ChildItem -Path $env:TEMP -Filter "SourceDeletion_*.status" -File -ErrorAction SilentlyContinue | 
+        Where-Object { $_.LastWriteTime -lt $oneDayAgo } | 
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; $cleaned++ }
+    
+    if ($cleaned -gt 0) {
+        Write-Host "[$cleanupTimestamp] CLEANUP: Removed $cleaned old temp file(s)" -ForegroundColor Gray
+    }
+}
+
+# Run cleanup at script startup
+Invoke-TempFileCleanup
+
+# Function to check and set required registry keys for long path support
+function Set-RequiredRegistryKeys {
+    Write-Host "Checking and setting required registry keys for long path support..." -ForegroundColor Cyan
+    
+    try {
+        $netFrameworkPath = "HKLM:\SOFTWARE\Microsoft\.NETFramework\AppContext"
+        if (-not (Test-Path $netFrameworkPath)) {
+            New-Item -Path $netFrameworkPath -Force | Out-Null
+            Write-Host "Created .NETFramework\AppContext registry key" -ForegroundColor Green
+        }
+
+        $blockLongPathsValue = (Get-ItemProperty -Path $netFrameworkPath -Name "Switch.System.IO.BlockLongPaths" -ErrorAction SilentlyContinue)."Switch.System.IO.BlockLongPaths"
+        if ($blockLongPathsValue -ne "false") {
+            Set-ItemProperty -Path $netFrameworkPath -Name "Switch.System.IO.BlockLongPaths" -Value "false" -Type String
+            Write-Host "Set Switch.System.IO.BlockLongPaths to false" -ForegroundColor Green
+        } else {
+            Write-Host "Switch.System.IO.BlockLongPaths already set to false" -ForegroundColor Green
+        }
+
+        $useLegacyPathValue = (Get-ItemProperty -Path $netFrameworkPath -Name "Switch.System.IO.UseLegacyPathHandling" -ErrorAction SilentlyContinue)."Switch.System.IO.UseLegacyPathHandling"
+        if ($useLegacyPathValue -ne "false") {
+            Set-ItemProperty -Path $netFrameworkPath -Name "Switch.System.IO.UseLegacyPathHandling" -Value "false" -Type String
+            Write-Host "Set Switch.System.IO.UseLegacyPathHandling to false" -ForegroundColor Green
+        } else {
+            Write-Host "Switch.System.IO.UseLegacyPathHandling already set to false" -ForegroundColor Green
+        }
+
+        $fileSystemPath = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+        $longPathsValue = (Get-ItemProperty -Path $fileSystemPath -Name "LongPathsEnabled" -ErrorAction SilentlyContinue).LongPathsEnabled
+        if ($longPathsValue -ne 1) {
+            Set-ItemProperty -Path $fileSystemPath -Name "LongPathsEnabled" -Value 1 -Type DWord
+            Write-Host "Set LongPathsEnabled to 1" -ForegroundColor Green
+        } else {
+            Write-Host "LongPathsEnabled already set to 1" -ForegroundColor Green
+        }
+
+        Write-Host "All registry keys verified and set successfully" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "Error setting registry keys: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Call the function to set registry keys
+if (-not (Set-RequiredRegistryKeys)) {
+    Write-Host "Failed to set required registry keys. Script may encounter issues with long paths." -ForegroundColor Red
+}
+
+# Ensure log directory exists
+if (-not (Test-Path $LoggingSharePointMigration)) {
+    New-Item -Path $LoggingSharePointMigration -ItemType Directory -Force | Out-Null
+}
+
+# ===== INCREMENTAL DELETE CONFIGURATION =====
+# When enabled, successfully migrated files are deleted immediately after confirmation
+# Failed/skipped files remain in source for re-migration attempts
+$EnableIncrementalDelete = $true  # Set to $false for traditional "all or nothing" approach
+
+# ===== EMPTY FOLDER CLEANUP CONFIGURATION =====
+# When enabled, empty folders are deleted after source file deletion
+# SAFETY: Only folders that are 100% empty (no files, no hidden files, no subfolders) are deleted
+# Uses: Same "DeleteSource" column as file deletion - no separate column needed
+# Flow: DeleteSource triggers file deletion -> then empty folders are cleaned up (if this is enabled)
+# WARNING: This is irreversible - ensure backups exist before enabling!
+$EnableEmptyFolderCleanup = $true  # Set to $false to globally disable (only files deleted, folders remain)
+
+# ===== MAX ITEMS PER EXECUTION (FALLBACK DEFAULT) =====
+# NOTE: This is ONLY used when -MaxItems is not specified on command line!
+# Production scheduled tasks use: -MaxItems 1 -Continuous -UseScheduling
+# which OVERRIDES this setting (1 item at a time, loop until done)
+#
+# This fallback is used for:
+#   - Interactive testing (running script without parameters)
+#   - Tasks that forget to specify -MaxItems
+# Set to 0 for unlimited (process all available items)
+$MaxItemsDefault = 10  # Fallback only - production tasks override with -MaxItems 1
+
+# ===== MIGRATION SERVICE ACCOUNT =====
+# This account must be added as Site Owner to each target site before migration
+$MigrationServiceAccount = "svc-migration@contoso.gov"
+
+# ===== APP-ONLY AUTHENTICATION (Scheduled Task / Unattended) =====
+# Set $UseAppAuth = $true for scheduled task (certificate auth)
+# Set $UseAppAuth = $false for saved credentials (from XML file)
+# Override with -UseSavedCreds parameter to use stored credentials
+$UseAppAuth = $true  # Using certificate auth for scheduled tasks
+if ($UseSavedCreds) {
+    $UseAppAuth = $false
+    Write-Host "Saved credentials mode enabled - will use credentials from $CredentialPath" -ForegroundColor Yellow
+}
+
+# Azure AD App Registration values (from Setup-AppRegistration.ps1 output)
+# Only needed when $UseAppAuth = $true
+$AppClientId = "cccccccc-cccc-cccc-cccc-cccccccccccc"              # Application (Client) ID - default/fallback
+$AppTenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"                  # Directory (Tenant) ID  
+$AppCertificateThumbprint = "1111111111111111111111111111111111111111"  # Certificate thumbprint - UPDATE THIS!
+
+# Override AppClientId if provided via parameter (for multi-instance scheduled tasks)
+if (-not [string]::IsNullOrWhiteSpace($AppClientIdParam)) {
+    $AppClientId = $AppClientIdParam
+    Write-Host "Using AppClientId from parameter: $AppClientId" -ForegroundColor Cyan
+}
+
+# Override AppCertificateThumbprint if provided via parameter (for multi-instance scheduled tasks)
+if (-not [string]::IsNullOrWhiteSpace($AppCertThumbprintParam)) {
+    $AppCertificateThumbprint = $AppCertThumbprintParam
+    Write-Host "Using AppCertificateThumbprint from parameter: $AppCertificateThumbprint" -ForegroundColor Cyan
+}
+
+#endregion
+
+#region ===== THROTTLING AND CONNECTION FUNCTIONS =====
+
+# Purpose: Implements exponential backoff when SharePoint throttling is detected
+function Handle-SPOThrottling {
+    param (
+        [int]$RetryCount = 0,
+        [int]$MaxRetries = 5,
+        [int]$InitialWaitTimeSeconds = 5
+    )
+    
+    if ($RetryCount -ge $MaxRetries) {
+        Write-Host "Maximum retry attempts reached. Operation failed." -ForegroundColor Red
+        return $false
+    }
+    
+    $waitTime = $InitialWaitTimeSeconds * [Math]::Pow(2, $RetryCount)
+    Write-Host "Throttling detected. Waiting for $waitTime seconds before retrying (attempt $($RetryCount + 1) of $MaxRetries)..." -ForegroundColor Yellow
+    Start-Sleep -Seconds $waitTime
+    return $true
+}
+
+# Function to check SPO Service connection
+function Is-SPOServiceConnected {
+    Write-Debug-Message "Checking if there is an active connection to SPO Admin..." "Green"
+    try {
+        $spoContext = Get-SPOSite -Limit 1 -ErrorAction Stop
+        if ($spoContext) {
+            Write-Debug-Message "Active connection to SPO Admin found..." "Green"
+            return $true
+        }
+    }
+    catch {
+        Write-Debug-Message "No active connection to SPO Admin..." "Green"
+        return $false
+    }
+}
+
+# Function to check PnP Online connection
+function Is-PnPOnlineConnected {
+    Write-Debug-Message "Checking if there is an active connection to PnPOnline..." "Green"
+    try {
+        $pnpContext = Get-PnPConnection -ErrorAction Stop
+        if ($pnpContext -and $pnpContext.Url) {
+            Write-Debug-Message "Active connection to PnPOnline found at $($pnpContext.Url)..." "Green"
+            return $true
+        }
+    }
+    catch {
+        Write-Debug-Message "No active connection to PnPOnline... Please Wait..." "Green"
+        return $false
+    }
+}
+
+# Function to validate SPO credentials
+function Test-SPOCredentials {
+    param (
+        [System.Management.Automation.PSCredential]$Credential
+    )
+    
+    try {
+        Write-Host "Validating credentials..." -ForegroundColor Yellow
+        $tempAdmin = Connect-SPOService -Url $adminUrl 
+        Write-Host "Credentials validated successfully." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "Credential validation failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Purpose: Establishes and validates SharePoint Online connections with throttling awareness
+function Ensure-PnPConnection {
+    param (
+        [switch]$ForceReconnect,
+        [string]$Url = $siteUrl
+    )
+    
+    try {
+        # First check if we have a valid context AND if it's connected to the right URL
+        $hasValidContext = $false
+        $connectedToCorrectUrl = $false
+        try {
+            $context = Get-PnPContext -ErrorAction Stop
+            if ($context) {
+                $hasValidContext = $true
+                # Check if we're connected to the right URL
+                $currentUrl = $context.Url
+                if ($currentUrl -and $Url) {
+                    # Normalize URLs for comparison (remove trailing slash)
+                    $normalizedCurrent = $currentUrl.TrimEnd('/')
+                    $normalizedTarget = $Url.TrimEnd('/')
+                    if ($normalizedCurrent -eq $normalizedTarget) {
+                        $connectedToCorrectUrl = $true
+                        Write-Debug-Message "Already connected to correct site: $Url" "Green"
+                    } else {
+                        Write-Debug-Message "Connected to $currentUrl but need $Url" "Yellow"
+                    }
+                }
+            }
+        } catch {
+            Write-Debug-Message "Current connection has no valid SharePoint context" "Yellow"
+            $hasValidContext = $false
+        }
+        
+        # Only reconnect if: no valid context, connected to wrong URL, or ForceReconnect AND not already at correct URL
+        $needsReconnect = (-not $hasValidContext) -or (-not $connectedToCorrectUrl)
+        if ($ForceReconnect -and $connectedToCorrectUrl) {
+            # Even with ForceReconnect, skip if already connected to correct URL
+            Write-Debug-Message "Skipping reconnect - already connected to correct site" "Green"
+            return $true
+        }
+        
+        if ($needsReconnect) {
+            Write-Debug-Message "Establishing new PnP connection to $Url..." "Yellow"
+            
+            try {
+                Disconnect-PnPOnline -ErrorAction SilentlyContinue
+            } catch { }
+            
+            $retryCount = 0
+            $maxRetries = 3
+            $connectionSuccess = $false
+            
+            while (-not $connectionSuccess -and $retryCount -lt $maxRetries) {
+                try {
+                    # Use App-Only or Saved Credentials authentication based on $UseAppAuth
+                    if ($UseAppAuth) {
+                        Write-Debug-Message "Using App-Only authentication (certificate)..." "Cyan"
+                        # Note: Omit -AzureEnvironment for USSec - PnP auto-detects from .scloud URL
+                        Connect-PnPOnline -Url $Url `
+                            -ClientId $AppClientId `
+                            -Tenant $AppTenantId `
+                            -Thumbprint $AppCertificateThumbprint `
+                            -ErrorAction Stop
+                    }
+                    else {
+                        # Use saved credentials from XML file
+                        if (-not $script:SPOCredential) {
+                            if (Test-Path $CredentialPath) {
+                                $script:SPOCredential = Import-Clixml -Path $CredentialPath
+                                Write-Debug-Message "Loaded credentials: $($script:SPOCredential.UserName)" "Cyan"
+                            } else {
+                                throw "Saved credentials not found at $CredentialPath. Run script interactively first to save credentials."
+                            }
+                        }
+                        Write-Debug-Message "Using saved credentials ($($script:SPOCredential.UserName))..." "Cyan"
+                        Connect-PnPOnline -Url $Url -Credentials $script:SPOCredential -ErrorAction Stop
+                    }
+                    
+                    $context = Get-PnPContext -ErrorAction Stop
+                    if (-not $context) {
+                        throw "Failed to establish a valid context after connection"
+                    }
+                    
+                    $connectionSuccess = $true
+                    Write-Debug-Message "PnP connection established successfully to $Url" "Green"
+                }
+                catch {
+                    if ($_.Exception.Message -like "*throttled*" -or 
+                        $_.Exception.Message -like "*429*" -or
+                        $_.Exception.Message -like "*503*") {
+                        
+                        $retryCount++
+                        $shouldRetry = Handle-SPOThrottling -RetryCount $retryCount -MaxRetries $maxRetries -InitialWaitTimeSeconds 10
+                        
+                        if (-not $shouldRetry) {
+                            Write-Host "Failed to establish PnP connection after throttling retries: $($_.Exception.Message)" -ForegroundColor Red
+                            return $false
+                        }
+                    }
+                    else {
+                        Write-Host "Failed to establish PnP connection: $($_.Exception.Message)" -ForegroundColor Red
+                        
+                        try {
+                            Write-Host "Attempting one more connection with clean session..." -ForegroundColor Yellow
+                            Disconnect-PnPOnline -ErrorAction SilentlyContinue
+                            Start-Sleep -Seconds 3
+                            
+                            if ($UseAppAuth) {
+                                Connect-PnPOnline -Url $Url `
+                                    -ClientId $AppClientId `
+                                    -Tenant $AppTenantId `
+                                    -Thumbprint $AppCertificateThumbprint `
+                                    -ErrorAction Stop
+                            }
+                            else {
+                                Connect-PnPOnline -Url $Url -Credentials $script:SPOCredential -ErrorAction Stop
+                            }
+                            Write-Host "Second connection attempt successful" -ForegroundColor Green
+                            return $true
+                        } catch {
+                            Write-Host "Final connection attempt failed: $($_.Exception.Message)" -ForegroundColor Red
+                            return $false
+                        }
+                    }
+                }
+            }
+            
+            return $connectionSuccess
+        }
+        
+        # Already connected to correct URL - no reconnect needed
+        return $true
+    }
+    catch {
+        Write-Host "Failed to establish PnP connection: $($_.Exception.Message)" -ForegroundColor Red
+        
+        try {
+            Write-Host "Attempting one more connection with clean session..." -ForegroundColor Yellow
+            Disconnect-PnPOnline -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            if ($UseAppAuth) {
+                Connect-PnPOnline -Url $Url `
+                    -ClientId $AppClientId `
+                    -Tenant $AppTenantId `
+                    -Thumbprint $AppCertificateThumbprint `
+                    -ErrorAction Stop
+            }
+            else {
+                Connect-PnPOnline -Url $Url -Credentials $script:SPOCredential -ErrorAction Stop
+            }
+            Write-Host "Second connection attempt successful" -ForegroundColor Green
+            return $true
+        } catch {
+            Write-Host "Final connection attempt failed: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+}
+
+#endregion
+
+#region ===== CREDENTIAL MANAGEMENT =====
+
+# Function to save credentials securely to XML (for SPMT)
+function Save-SPMTCredentials {
+    param (
+        [System.Management.Automation.PSCredential]$Credential
+    )
+    try {
+        $Credential | Export-Clixml -Path $CredentialPath
+        Write-Host "Credentials saved successfully to $CredentialPath." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "Failed to save credentials: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Function to load saved credentials from XML (for SPMT)
+function Load-SPMTCredentials {
+    if (Test-Path $CredentialPath) {
+        try {
+            $script:SPOCredential = Import-Clixml -Path $CredentialPath
+            Write-Host "Loaded saved credentials for SPMT: $($script:SPOCredential.UserName)" -ForegroundColor Green
+            return $true
+        }
+        catch {
+            Write-Host "Failed to load saved credentials: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+    return $false
+}
+
+# Function to clear saved credentials
+function Clear-SavedCredentials {
+    if (Test-Path $CredentialPath) {
+        try {
+            Remove-Item -Path $CredentialPath -Force
+            Write-Host "Saved credentials successfully deleted from $CredentialPath" -ForegroundColor Green
+            return $true
+        }
+        catch {
+            Write-Host "Failed to delete credentials: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+    else {
+        Write-Host "No saved credentials found at $CredentialPath" -ForegroundColor Yellow
+        return $true
+    }
+}
+
+#endregion
+
+#region ===== TARGET URL VALIDATION =====
+
+# Function to validate target URL
+function Test-TargetUrl {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TargetUrl
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($TargetUrl)) {
+        Write-Host "ERROR: Target URL is empty or null" -ForegroundColor Red
+        return $false
+    }
+    
+    if (-not $TargetUrl.StartsWith($RequiredTargetUrlPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "ERROR: Target URL must start with '$RequiredTargetUrlPrefix'" -ForegroundColor Red
+        Write-Host "       Provided URL: $TargetUrl" -ForegroundColor Red
+        return $false
+    }
+    
+    Write-Host "Target URL validated: $TargetUrl" -ForegroundColor Green
+    return $true
+}
+
+#endregion
+
+#region ===== SOURCE PATH VALIDATION =====
+
+# Function to validate source path exists
+function Test-SourcePath {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+        Write-Host "ERROR: Source path is empty or null" -ForegroundColor Red
+        return $false
+    }
+    
+    if (-not (Test-Path $SourcePath)) {
+        Write-Host "ERROR: Source path does not exist: $SourcePath" -ForegroundColor Red
+        return $false
+    }
+    
+    Write-Host "Source path validated: $SourcePath" -ForegroundColor Green
+    return $true
+}
+
+#endregion
+
+#region ===== STORAGE CAPACITY CHECK =====
+
+# Function to determine optimal year cutoff based on available storage
+# Compares Size7YrMB, Size5YrMB, Size3YrMB against StorageAvailable
+# Returns: @{ Success, YearsToUse, DateCutoff, Reason, RequiresDowngrade }
+function Get-OptimalYearCutoff {
+    param (
+        [Parameter(Mandatory=$true)]
+        $ListItem
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $storageBuffer = 1.10  # 10% buffer for overhead
+    
+    # Get StorageAvailable
+    $storageAvailable = 0
+    if ($ListItem["StorageAvailable"]) {
+        $val = $ListItem["StorageAvailable"].ToString().Trim()
+        [double]::TryParse($val, [ref]$storageAvailable) | Out-Null
+    }
+    
+    # Check if StorageAvailable is populated
+    if ($storageAvailable -le 0) {
+        Write-Host "[$timestamp] STORAGE CHECK: StorageAvailable not populated" -ForegroundColor Yellow
+        return @{
+            Success = $false
+            YearsToUse = 0
+            DateCutoff = $null
+            Reason = "STORAGE: Target site storage data not populated yet. Automation will update shortly, please wait and retry."
+            RequiresDowngrade = $false
+        }
+    }
+    
+    # Get size fields
+    $size7Yr = 0
+    $size5Yr = 0
+    $size3Yr = 0
+    
+    if ($ListItem["Size7YrMB"]) {
+        $val = $ListItem["Size7YrMB"].ToString().Trim()
+        [double]::TryParse($val, [ref]$size7Yr) | Out-Null
+    }
+    if ($ListItem["Size5YrMB"]) {
+        $val = $ListItem["Size5YrMB"].ToString().Trim()
+        [double]::TryParse($val, [ref]$size5Yr) | Out-Null
+    }
+    if ($ListItem["Size3YrMB"]) {
+        $val = $ListItem["Size3YrMB"].ToString().Trim()
+        [double]::TryParse($val, [ref]$size3Yr) | Out-Null
+    }
+    
+    # Check if size fields are populated
+    if ($size7Yr -le 0 -and $size5Yr -le 0 -and $size3Yr -le 0) {
+        Write-Host "[$timestamp] STORAGE CHECK: Size fields not populated" -ForegroundColor Yellow
+        return @{
+            Success = $false
+            YearsToUse = 0
+            DateCutoff = $null
+            Reason = "STORAGE: UNC scan data not populated yet. Automation will update shortly, please wait and retry."
+            RequiresDowngrade = $false
+        }
+    }
+    
+    # Calculate required storage with buffer
+    $required7Yr = $size7Yr * $storageBuffer
+    $required5Yr = $size5Yr * $storageBuffer
+    $required3Yr = $size3Yr * $storageBuffer
+    
+    Write-Host "[$timestamp] STORAGE CHECK: Available=${storageAvailable}MB | 7yr=${size7Yr}MB | 5yr=${size5Yr}MB | 3yr=${size3Yr}MB" -ForegroundColor Cyan
+    
+    # Check 7yr first (preferred)
+    if ($required7Yr -le $storageAvailable) {
+        Write-Host "[$timestamp] STORAGE CHECK: 7yr fits (${size7Yr}MB + 10% buffer <= ${storageAvailable}MB)" -ForegroundColor Green
+        return @{
+            Success = $true
+            YearsToUse = 7
+            DateCutoff = (Get-Date).AddYears(-7).ToString("yyyy-MM-dd")
+            Reason = $null
+            RequiresDowngrade = $false
+        }
+    }
+    
+    # Try 5yr
+    if ($required5Yr -le $storageAvailable) {
+        $reason = "7yr (${size7Yr}MB) > storage (${storageAvailable}MB), using 5yr (${size5Yr}MB)"
+        Write-Host "[$timestamp] STORAGE CHECK: Downgrade to 5yr - $reason" -ForegroundColor Yellow
+        return @{
+            Success = $true
+            YearsToUse = 5
+            DateCutoff = (Get-Date).AddYears(-5).ToString("yyyy-MM-dd")
+            Reason = "STORAGE: $reason"
+            RequiresDowngrade = $true
+        }
+    }
+    
+    # Try 3yr
+    if ($required3Yr -le $storageAvailable) {
+        $reason = "7yr (${size7Yr}MB) and 5yr (${size5Yr}MB) > storage (${storageAvailable}MB), using 3yr (${size3Yr}MB)"
+        Write-Host "[$timestamp] STORAGE CHECK: Downgrade to 3yr - $reason" -ForegroundColor Yellow
+        return @{
+            Success = $true
+            YearsToUse = 3
+            DateCutoff = (Get-Date).AddYears(-3).ToString("yyyy-MM-dd")
+            Reason = "STORAGE: $reason"
+            RequiresDowngrade = $true
+        }
+    }
+    
+    # Nothing fits
+    $reason = "3yr (${size3Yr}MB) exceeds available storage (${storageAvailable}MB). Increase site quota or reduce source data."
+    Write-Host "[$timestamp] STORAGE CHECK: INSUFFICIENT - $reason" -ForegroundColor Red
+    return @{
+        Success = $false
+        YearsToUse = 0
+        DateCutoff = $null
+        Reason = "STORAGE: $reason"
+        RequiresDowngrade = $false
+    }
+}
+
+#endregion
+
+#region ===== SITE PERMISSION FUNCTIONS =====
+
+# Function to ensure SPMT credential account has Site Collection Admin permissions
+# Uses SPO Admin connection to grant permissions (more reliable than PnP group membership)
+# Returns $true if permissions are OK (or successfully added), $false if failed
+# ListItem is optional - if not provided, errors are only written to console
+# NOTE: Grant-AppSitePermission is called BEFORE this function and handles granting permissions
+#       This function just validates that permissions are in place (or skips validation for app auth)
+function Test-MigrationServiceAccountPermission {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TargetSiteUrl,
+        
+        [Parameter(Mandatory=$false)]
+        $ListItem = $null
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    
+    # If using App-Only auth, skip SPO Admin checks (they require user context)
+    # The Grant-AppSitePermission function has already granted both app and service account permissions
+    if ($UseAppAuth) {
+        Write-Host "[$timestamp] PERMISSION_CHECK: Skipping SPO Admin validation - permissions were granted via Grant-AppSitePermission" -ForegroundColor Cyan
+        return $true
+    }
+    
+    # For interactive auth, permissions were already granted via Grant-AppSitePermission
+    # This just does an additional verification using SPO Admin cmdlets
+    Write-Host "[$timestamp] PERMISSION_CHECK: Verifying permissions (already granted via Grant-AppSitePermission)..." -ForegroundColor Cyan
+    
+    # Use the SPMT credential username - this is the account SPMT actually authenticates with
+    $accountToGrant = if ($SPOCredential -and $SPOCredential.UserName) { 
+        $SPOCredential.UserName 
+    } else { 
+        $MigrationServiceAccount 
+    }
+    
+    try {
+        # Use SPO Admin connection to check/add permissions (more reliable than PnP)
+        Write-Host "[$timestamp] PERMISSION_CHECK: Using SPO Admin to verify/grant permissions..." -ForegroundColor Gray
+        
+        # Check if account already has access
+        try {
+            $existingUser = Get-SPOUser -Site $TargetSiteUrl -LoginName $accountToGrant -ErrorAction Stop
+            
+            if ($existingUser.IsSiteAdmin) {
+                Write-Host "[$timestamp] PERMISSION_CHECK: Account '$accountToGrant' already has Site Collection Admin rights" -ForegroundColor Green
+                
+                # Still verify permissions by trying to get site details
+                Write-Host "[$timestamp] PERMISSION_CHECK: Verifying site access..." -ForegroundColor Gray
+                try {
+                    $siteDetails = Get-SPOSite -Identity $TargetSiteUrl -ErrorAction Stop
+                    Write-Host "[$timestamp] PERMISSION_CHECK: Site verified - Status: $($siteDetails.Status), LockState: $($siteDetails.LockState)" -ForegroundColor Gray
+                    
+                    if ($siteDetails.LockState -ne "Unlock") {
+                        Write-Host "[$timestamp] PERMISSION_CHECK WARNING: Site lock state is '$($siteDetails.LockState)' - this may cause permission issues!" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "[$timestamp] PERMISSION_CHECK: Could not verify site details: $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+                
+                return $true
+            }
+            else {
+                Write-Host "[$timestamp] PERMISSION_CHECK: Account exists but is not Site Collection Admin. Elevating..." -ForegroundColor Yellow
+            }
+        }
+        catch {
+            # User doesn't exist on site yet, will be added
+            Write-Host "[$timestamp] PERMISSION_CHECK: Account not found on site. Adding..." -ForegroundColor Yellow
+        }
+        
+        # Add account as Site Collection Admin using SPO Admin powers
+        try {
+            Write-Host "[$timestamp] PERMISSION_CHECK: Adding '$accountToGrant' as Site Collection Admin..." -ForegroundColor Cyan
+            Set-SPOUser -Site $TargetSiteUrl -LoginName $accountToGrant -IsSiteCollectionAdmin $true -ErrorAction Stop
+            
+            Write-Host "[$timestamp] PERMISSION_CHECK: Successfully granted Site Collection Admin rights" -ForegroundColor Green
+            
+            # Wait for permission propagation (increased to 45 seconds)
+            Write-Host "[$timestamp] PERMISSION_CHECK: Waiting 45 seconds for permission propagation..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 45
+            
+            # Verify the permission was applied
+            try {
+                $verifyUser = Get-SPOUser -Site $TargetSiteUrl -LoginName $accountToGrant -ErrorAction Stop
+                if ($verifyUser.IsSiteAdmin) {
+                    Write-Host "[$timestamp] PERMISSION_CHECK: Verified - account is now Site Collection Admin" -ForegroundColor Green
+                } else {
+                    Write-Host "[$timestamp] PERMISSION_CHECK WARNING: Verification shows account is NOT Site Collection Admin!" -ForegroundColor Red
+                }
+            } catch {
+                Write-Host "[$timestamp] PERMISSION_CHECK: Could not verify permission: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+            
+            return $true
+        }
+        catch {
+            $addErrorMsg = "Failed to add '$accountToGrant' as Site Collection Admin: $($_.Exception.Message)"
+            Write-Host "[$timestamp] PERMISSION_CHECK ERROR: $addErrorMsg" -ForegroundColor Red
+            if ($ListItem) {
+                Update-ListItemError -ListItem $ListItem -ErrorMessage $addErrorMsg -ErrorCategory "PERMISSION_ADD"
+            }
+            return $false
+        }
+    }
+    catch {
+        $errorMsg = "Permission check failed: $($_.Exception.Message)"
+        Write-Host "[$timestamp] PERMISSION_CHECK ERROR: $errorMsg" -ForegroundColor Red
+        if ($ListItem) {
+            Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "PERMISSION_CHECK"
+        }
+        return $false
+    }
+}
+
+# Function to grant permissions to a site before migration
+# This is called automatically before every migration to ensure:
+#   The Migration Service Account has Site Collection Admin rights on the target site
+# Note: App registration permissions are not needed here if app has tenant-level Sites.FullControl.All
+function Grant-AppSitePermission {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TargetSiteUrl
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    
+    Write-Debug-Message "[$timestamp] SITE_PERMISSION: Checking service account access to $TargetSiteUrl" "Cyan"
+    
+    # Build list of accounts to grant permissions to
+    $accountsToGrant = @()
+    
+    # Always add the migration service account
+    if (-not [string]::IsNullOrWhiteSpace($MigrationServiceAccount)) {
+        $accountsToGrant += $MigrationServiceAccount
+    }
+    
+    # Add SPMT credential account if different
+    if ($SPOCredential -and $SPOCredential.UserName -and $SPOCredential.UserName -ne $MigrationServiceAccount) {
+        $accountsToGrant += $SPOCredential.UserName
+    }
+    
+    if ($accountsToGrant.Count -eq 0) {
+        Write-Debug-Message "[$timestamp] SITE_PERMISSION: No accounts to grant - skipping" "Gray"
+        return $true
+    }
+    
+    try {
+        # Save current connection URL
+        $currentConnection = $null
+        try {
+            $currentConnection = (Get-PnPConnection -ErrorAction SilentlyContinue).Url
+        } catch { }
+        
+        # Connect to target site to check existing admins
+        Write-Debug-Message "[$timestamp] SITE_PERMISSION: Connecting to target site to check admins..." "Gray"
+        if ($UseAppAuth) {
+            Connect-PnPOnline -Url $TargetSiteUrl `
+                -ClientId $AppClientId `
+                -Tenant $AppTenantId `
+                -Thumbprint $AppCertificateThumbprint `
+                -ErrorAction Stop
+        } else {
+            Connect-PnPOnline -Url $TargetSiteUrl -Credentials $script:SPOCredential -ErrorAction Stop
+        }
+        
+        # Get existing site collection admins
+        $existingAdmins = @()
+        try {
+            $admins = Get-PnPSiteCollectionAdmin -ErrorAction Stop
+            $existingAdmins = $admins | ForEach-Object { $_.Email.ToLower() }
+            Write-Debug-Message "[$timestamp] SITE_PERMISSION: Found $($existingAdmins.Count) existing admins" "Gray"
+        }
+        catch {
+            Write-Debug-Message "[$timestamp] SITE_PERMISSION: Could not retrieve existing admins, will attempt to add" "Yellow"
+        }
+        
+        # Filter to only accounts that need to be added
+        $accountsToAdd = @()
+        foreach ($account in $accountsToGrant) {
+            if ($account.ToLower() -notin $existingAdmins) {
+                $accountsToAdd += $account
+            } else {
+                Write-Debug-Message "[$timestamp] SITE_PERMISSION: '$account' is already Site Collection Admin - skipping" "Green"
+            }
+        }
+        
+        # If all accounts already have access, skip the admin connection
+        if ($accountsToAdd.Count -eq 0) {
+            Write-Debug-Message "[$timestamp] SITE_PERMISSION: All required accounts already have admin access" "Green"
+            # Reconnect to original site if needed
+            if ($currentConnection -and $currentConnection -ne $TargetSiteUrl) {
+                if ($UseAppAuth) {
+                    Connect-PnPOnline -Url $currentConnection `
+                        -ClientId $AppClientId `
+                        -Tenant $AppTenantId `
+                        -Thumbprint $AppCertificateThumbprint `
+                        -ErrorAction SilentlyContinue
+                } else {
+                    Connect-PnPOnline -Url $currentConnection -Credentials $script:SPOCredential -ErrorAction SilentlyContinue
+                }
+            }
+            return $true
+        }
+        
+        # Connect to SharePoint Admin to grant permissions
+        Write-Debug-Message "[$timestamp] SITE_PERMISSION: Connecting to SharePoint Admin..." "Gray"
+        if ($UseAppAuth) {
+            Connect-PnPOnline -Url $adminUrl `
+                -ClientId $AppClientId `
+                -Tenant $AppTenantId `
+                -Thumbprint $AppCertificateThumbprint `
+                -ErrorAction Stop
+        } else {
+            Connect-PnPOnline -Url $adminUrl -Credentials $script:SPOCredential -ErrorAction Stop
+        }
+        
+        # Grant permissions only to accounts that need it
+        foreach ($account in $accountsToAdd) {
+            try {
+                Write-Host "[$timestamp] SITE_PERMISSION: Adding '$account' as Site Collection Admin..." -ForegroundColor Cyan
+                Set-PnPTenantSite -Url $TargetSiteUrl -Owners $account -ErrorAction Stop
+                Write-Host "[$timestamp] SITE_PERMISSION: Successfully granted rights to '$account'" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "[$timestamp] SITE_PERMISSION WARNING: Could not add '$account' - $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+        
+        # Brief wait for permission propagation (only if we added accounts)
+        Start-Sleep -Seconds 3
+        
+        # Reconnect to original site if we had one
+        if ($currentConnection) {
+            Write-Debug-Message "[$timestamp] SITE_PERMISSION: Reconnecting to $currentConnection..." "Gray"
+            if ($UseAppAuth) {
+                Connect-PnPOnline -Url $currentConnection `
+                    -ClientId $AppClientId `
+                    -Tenant $AppTenantId `
+                    -Thumbprint $AppCertificateThumbprint `
+                    -ErrorAction SilentlyContinue
+            } else {
+                Connect-PnPOnline -Url $currentConnection -Credentials $script:SPOCredential -ErrorAction SilentlyContinue
+            }
+        }
+        
+        return $true
+    }
+    catch {
+        Write-Host "[$timestamp] SITE_PERMISSION ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[$timestamp] SITE_PERMISSION: Migration will continue - permissions may already exist" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+#endregion
+
+#region ===== SPMT FUNCTIONS =====
+
+# Function to silently stop any running SPMT migrations
+function Invoke-SilentSPMTCommand {
+    param (
+        [scriptblock]$Command
+    )
+    try {
+        & $Command | Out-Null
+    } catch {
+        # Silently ignore any errors
+    }
+}
+
+# Function to create JSON definition for SPMT task with date filtering
+function New-SPMTTaskJson {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetSiteUrl,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetList,
+        
+        [string]$TargetListRelativePath = "",
+        
+        [string]$ModifiedAfterDate = $DateCutoff,
+        
+        [bool]$MigrateVersionHistory = $true,
+        
+        [int]$KeepVersions = 100
+    )
+    
+    # Build the settings object
+    # NOTE: PreservePermission=false for Team Sites (can cause permission errors if true)
+    $settings = @{
+        MigrateFileVersionHistory = $MigrateVersionHistory
+        KeepFileVersions = $KeepVersions
+        MigrateHiddenItems = $false
+        PreservePermission = $false  # Disabled - can cause issues on Team Sites
+        EnableIncremental = $false
+    }
+    
+    # Only add date filter if specified (null = migrate all files)
+    if (-not [string]::IsNullOrWhiteSpace($ModifiedAfterDate)) {
+        $settings.MigrateItemsModifiedAfter = $ModifiedAfterDate
+    }
+    
+    # Build the task object
+    $taskObject = @{
+        SourcePath = $SourcePath
+        TargetPath = $TargetSiteUrl
+        TargetList = $TargetList
+    }
+    
+    # Add relative path if specified
+    if (-not [string]::IsNullOrWhiteSpace($TargetListRelativePath)) {
+        $taskObject.TargetListRelativePath = $TargetListRelativePath
+    }
+    
+    # Add settings
+    $taskObject.Settings = $settings
+    
+    # Convert to JSON
+    $jsonString = ConvertTo-Json $taskObject -Depth 10
+    
+    Write-Host "Generated SPMT Task JSON with date filter: $ModifiedAfterDate" -ForegroundColor Cyan
+    Write-Host $jsonString -ForegroundColor Gray
+    
+    return $jsonString
+}
+
+# Function to run SPMT in a separate PowerShell process to avoid PnP assembly conflicts
+# This is CRITICAL - PnP.PowerShell loads assemblies that conflict with SPMT's MSAL authentication
+function Invoke-SPMTInSeparateProcess {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetSiteUrl,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetList,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$TargetRelativePath = "",
+        
+        [Parameter(Mandatory=$false)]
+        [string]$ItemDateCutoff = ""  # Per-item override for date cutoff
+    )
+    
+    # Get the path to the worker script (same directory as main script)
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        $scriptDir = $PSScriptRoot
+    }
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        $scriptDir = "F:\Scripts"  # Fallback
+    }
+    
+    $workerScript = Join-Path $scriptDir "SPMT-Worker.ps1"
+    
+    if (-not (Test-Path $workerScript)) {
+        Write-Host "ERROR: SPMT-Worker.ps1 not found at: $workerScript" -ForegroundColor Red
+        return @{
+            Success = $false
+            ReportPath = ""
+            ErrorMessage = "SPMT-Worker.ps1 not found"
+            StartOutput = ""
+        }
+    }
+    
+    Write-Host "Launching SPMT in separate process..." -ForegroundColor Cyan
+    Write-Debug-Message "  Worker script: $workerScript" "Gray"
+    
+    # Build arguments
+    # Note: BlockedExtensions is an array, convert to comma-separated for command line
+    $blockedExtStr = $BlockedExtensions -join ','
+    # Use per-item date cutoff if provided, otherwise use global DateCutoff
+    $dateCutoffStr = if ($ItemDateCutoff) { $ItemDateCutoff } elseif ($DateCutoff) { $DateCutoff } else { "" }
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$workerScript`"",
+        "-SourcePath", "`"$SourcePath`"",
+        "-TargetSiteUrl", "`"$TargetSiteUrl`"",
+        "-TargetList", "`"$TargetList`"",
+        "-TargetRelativePath", "`"$TargetRelativePath`"",
+        "-CredentialPath", "`"$CredentialPath`"",
+        "-WorkingFolder", "`"$LoggingSharePointMigration`"",
+        "-BlockedExtensions", "`"$blockedExtStr`"",
+        "-DateCutoff", "`"$dateCutoffStr`""
+    )
+    
+    # Add -DebugMode switch if enabled in main script
+    if ($DebugMode) {
+        $arguments += "-DebugMode"
+    }
+    
+    try {
+        # Run the worker script in a new PowerShell process and capture output
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = "powershell.exe"
+        $processInfo.Arguments = $arguments -join " "
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.RedirectStandardError = $true
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $false  # Show SPMT progress window
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        $process.Start() | Out-Null
+        
+        # Read output
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        
+        Write-Debug-Message "  SPMT process completed with exit code: $($process.ExitCode)" "Gray"
+        
+        if ($stderr) {
+            Write-Debug-Message "  SPMT stderr: $stderr" "Yellow"
+        }
+        
+        # Parse JSON result from stdout
+        # The worker script outputs JSON - find it in the output
+        # First try to find JSON object pattern in the entire output
+        $result = $null
+        
+        # Method 1: Try to parse the entire trimmed output as JSON
+        $trimmedOutput = $stdout.Trim()
+        if ($trimmedOutput -match '^\{.*\}$') {
+            try {
+                $result = $trimmedOutput | ConvertFrom-Json
+            } catch {
+                # Not valid JSON, try other methods
+            }
+        }
+        
+        # Method 2: Look for JSON pattern anywhere in the output
+        if (-not $result) {
+            if ($stdout -match '(\{[^{}]*"Success"[^{}]*\})') {
+                try {
+                    $result = $matches[1] | ConvertFrom-Json
+                } catch {
+                    # Not valid JSON
+                }
+            }
+        }
+        
+        # Method 3: Split by lines and find JSON line
+        if (-not $result) {
+            $jsonLines = $stdout -split "`r?`n" | Where-Object { $_.Trim() -match '^\{.*\}$' }
+            if ($jsonLines) {
+                $lastJson = ($jsonLines | Select-Object -Last 1).Trim()
+                try {
+                    $result = $lastJson | ConvertFrom-Json
+                } catch {
+                    # Not valid JSON
+                }
+            }
+        }
+        
+        if ($result) {
+            Write-Host "  SPMT Result: Success=$($result.Success)" -ForegroundColor $(if ($result.Success) { "Green" } else { "Red" })
+            if ($result.ReportPath) {
+                Write-Debug-Message "  Report Path: $($result.ReportPath)" "Gray"
+            }
+            if (-not $result.Success -and $result.ErrorMessage) {
+                Write-Host "  Error: $($result.ErrorMessage)" -ForegroundColor Red
+            }
+            
+            return $result
+        }
+        else {
+            Write-Host "  Could not parse SPMT worker output" -ForegroundColor Yellow
+            Write-Debug-Message "  Raw output: $stdout" "Gray"
+            return @{
+                Success = $false
+                ReportPath = ""
+                ErrorMessage = "Could not parse worker output: $stdout"
+                StartOutput = $stdout
+            }
+        }
+    }
+    catch {
+        Write-Host "  SPMT process failed: $($_.Exception.Message)" -ForegroundColor Red
+        return @{
+            Success = $false
+            ReportPath = ""
+            ErrorMessage = $_.Exception.Message
+            StartOutput = ""
+        }
+    }
+}
+
+# Function to execute SPMT migration with JSON definition
+function Start-CommonDriveMigration {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetUrl,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TargetList,
+        
+        [string]$TargetRelativePath = "",
+        
+        [Parameter(Mandatory=$true)]
+        $ListItem,  # SharePoint list item for status updates
+        
+        [string]$TranscriptPath = ""  # Path to transcript log file
+    )
+    
+    $maxRetries = 3
+    $migrationSuccess = $false
+    $migrationErrors = @()
+    $fatalErrorFound = $false
+    $spmtFailed = $false
+    $spmtErrorMsg = ""
+    
+    try {
+        # Validate source path
+        if (-not (Test-SourcePath -SourcePath $SourcePath)) {
+            $errorMsg = "Source path validation failed: $SourcePath"
+            Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "SOURCE_PATH"
+            return @{ Success = $false; Errors = @($errorMsg); FatalError = $true }
+        }
+        
+        # Validate target URL
+        if (-not (Test-TargetUrl -TargetUrl $TargetUrl)) {
+            $errorMsg = "Target URL validation failed: $TargetUrl"
+            Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "TARGET_URL"
+            return @{ Success = $false; Errors = @($errorMsg); FatalError = $true }
+        }
+        
+        # Auto-grant permissions to target site (service account + app if using app auth)
+        Write-Host "Granting permissions to target site..." -ForegroundColor Yellow
+        Grant-AppSitePermission -TargetSiteUrl $TargetUrl | Out-Null
+        
+        # Check migration service account permissions on target site
+        Write-Host "Checking migration service account permissions..." -ForegroundColor Yellow
+        if (-not (Test-MigrationServiceAccountPermission -TargetSiteUrl $TargetUrl -ListItem $ListItem)) {
+            $errorMsg = "Migration service account '$MigrationServiceAccount' does not have Site Owner permissions on $TargetUrl"
+            Write-Host $errorMsg -ForegroundColor Red
+            return @{ Success = $false; Errors = @($errorMsg); FatalError = $true }
+        }
+        
+        # Reconnect to tracking site after permission check
+        Ensure-PnPConnection -ForceReconnect | Out-Null
+        
+        # ===== STORAGE CAPACITY CHECK =====
+        # Determine optimal year cutoff based on available storage
+        # This compares Size7YrMB/5yr/3yr against StorageAvailable
+        Write-Host "Checking storage capacity for migration..." -ForegroundColor Yellow
+        $storageResult = Get-OptimalYearCutoff -ListItem $ListItem
+        
+        # Store per-item date cutoff (may differ from global if downgraded)
+        $itemDateCutoff = $null
+        
+        if (-not $storageResult.Success) {
+            # Storage check failed - either data not populated or insufficient storage
+            $errorMsg = $storageResult.Reason
+            Write-Host $errorMsg -ForegroundColor Red
+            Update-ListItemField -ListItem $ListItem -FieldName "ScriptError" -Value $errorMsg
+            Update-ListItemField -ListItem $ListItem -FieldName "Migrate" -Value "Failed"
+            Update-ListItemField -ListItem $ListItem -FieldName "YearUsed" -Value $null
+            Update-ListItemField -ListItem $ListItem -FieldName "Processing" -Value ""
+            return @{ Success = $false; Errors = @($errorMsg); FatalError = $true }
+        }
+        else {
+            # Storage check passed - set YearUsed field
+            $itemDateCutoff = $storageResult.DateCutoff
+            $yearsUsed = $storageResult.YearsToUse
+            Update-ListItemField -ListItem $ListItem -FieldName "YearUsed" -Value $yearsUsed
+            Write-Host "YearUsed set to: ${yearsUsed}yr (cutoff: $itemDateCutoff)" -ForegroundColor Green
+            
+            # If downgraded, log the reason to ScriptError
+            if ($storageResult.RequiresDowngrade -and $storageResult.Reason) {
+                Update-ListItemField -ListItem $ListItem -FieldName "ScriptError" -Value $storageResult.Reason
+            }
+        }
+        # ===== END STORAGE CAPACITY CHECK =====
+        
+        # Resolve the target list name - SPMT requires internal name ("Shared Documents") not display name ("Documents")
+        # Common mappings: "Documents" -> "Shared Documents", others use the name as-is
+        $resolvedTargetList = switch ($TargetList) {
+            "Documents" { "Shared Documents" }
+            "" { "Shared Documents" }
+            $null { "Shared Documents" }
+            default { $TargetList }
+        }
+        Write-Host "Target library: $TargetList -> Resolved to: $resolvedTargetList" -ForegroundColor Cyan
+        
+        # Update start date (use Eastern time for consistency across servers)
+        $startTime = Get-Date
+        Update-ListItemField -ListItem $ListItem -FieldName "StartDate" -Value $startTime.ToString('MM/dd/yyyy HH:mm:ss')
+        Update-ListItemField -ListItem $ListItem -FieldName "Server" -Value $env:COMPUTERNAME
+        
+        # Early LOG population - set working folder path immediately so admins can monitor
+        # This is populated BEFORE SPMT runs; will be updated again with final report paths after completion
+        $earlyLogValue = "Working: $LoggingSharePointMigration"
+        if ($TranscriptPath) {
+            $earlyLogValue += " | Transcript: $TranscriptPath"
+        }
+        Update-ListItemField -ListItem $ListItem -FieldName "LOG" -Value $earlyLogValue
+        Write-Host "LOG field updated with working folder for monitoring" -ForegroundColor Gray
+        
+        # Run SPMT in a SEPARATE PROCESS to avoid PnP assembly conflicts
+        # This is critical - PnP.PowerShell loads assemblies that break SPMT's MSAL authentication
+        Write-Host "Running SPMT migration in separate process..." -ForegroundColor Cyan
+        if ($TargetRelativePath) {
+            Write-Host "Target subfolder: $TargetRelativePath" -ForegroundColor Cyan
+        }
+        if ($itemDateCutoff) {
+            Write-Host "Using item-specific date cutoff: $itemDateCutoff" -ForegroundColor Cyan
+        }
+        $spmtResult = Invoke-SPMTInSeparateProcess -SourcePath $SourcePath -TargetSiteUrl $TargetUrl -TargetList $resolvedTargetList -TargetRelativePath $TargetRelativePath -ItemDateCutoff $itemDateCutoff
+        
+        # Check SPMT result - but don't throw yet, let report processing happen first
+        if (-not $spmtResult.Success) {
+            $spmtFailed = $true
+            $spmtErrorMsg = if ($spmtResult.ErrorMessage) { $spmtResult.ErrorMessage } else { "SPMT migration failed" }
+            Write-Host "SPMT migration FAILED: $spmtErrorMsg" -ForegroundColor Red
+        }
+        elseif ($spmtResult.PartialFailure) {
+            Write-Host "SPMT migration completed with partial failures - checking FatalError reports..." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "SPMT migration completed successfully!" -ForegroundColor Green
+        }
+        
+        # Get migration status from report folder
+        $migrationStatus = @{ ReportFolderPath = $spmtResult.ReportPath }
+        
+        # Wait for reports to be finalized
+        Write-Debug-Message "Waiting for reports to be finalized..." "Yellow"
+        Start-Sleep -Seconds 30
+        
+        # Process migration reports
+        Write-Debug-Message "Looking in path: $($migrationStatus.ReportFolderPath)" "Gray"
+        Push-Location $migrationStatus.ReportFolderPath
+        
+        $taskReportFolders = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -like "TaskReport_*" }
+        Write-Debug-Message "Found $($taskReportFolders.Count) TaskReport folders" "Gray"
+        
+        foreach ($taskFolder in $taskReportFolders) {
+            Write-Debug-Message "Processing folder: $($taskFolder.FullName)" "Gray"
+            
+            # Check for ItemReports
+            $itemReports = Get-ChildItem -Path "$($taskFolder.FullName)" -File -Filter "ItemReport_R1*.csv"
+            
+            foreach ($report in $itemReports) {
+                Write-Debug-Message "Processing report: $($report.FullName)" "Gray"
+                
+                $errors = Import-Csv $report.FullName | 
+                    Where-Object { $_.status -eq "skipped" -or $_.status -eq "failed" } |
+                    Select-Object Status, "Item name", Source, Message, "Result category"
+                
+                if ($errors) {
+                    Write-Host "Found $(($errors | Measure-Object).Count) errors/skips in this report" -ForegroundColor Red
+                    $migrationErrors += $errors
+                }
+            }
+            
+            # Check for FatalError files
+            $fatalErrorReports = Get-ChildItem -Path "$($taskFolder.FullName)" -File -Filter "FatalError_*.csv"
+            
+            if ($fatalErrorReports.Count -gt 0) {
+                $fatalErrorFound = $true
+                Write-Host "Found $($fatalErrorReports.Count) FatalError report(s)" -ForegroundColor Red
+                
+                foreach ($fatalReport in $fatalErrorReports) {
+                    try {
+                        $fatalErrors = Import-Csv $fatalReport.FullName
+                        foreach ($fe in $fatalErrors) {
+                            $migrationErrors += [PSCustomObject]@{
+                                Status = "FatalError"
+                                "Item name" = $fe.Source
+                                Source = $fe.Source
+                                Message = $fe.Message
+                                "Result category" = "FatalError"
+                            }
+                        }
+                    } catch {
+                        Write-Host "Error reading fatal error report: $($_.Exception.Message)" -ForegroundColor Red
+                    }
+                }
+            }
+        }
+        
+        Pop-Location
+        
+        # Create FailureSummaryReport2.csv if there are errors
+        Write-Debug-Message "Checking for migration errors to report..." "Cyan"
+        
+        # Get report folder path with fallback
+        $reportFolder = if ($migrationStatus -and $migrationStatus.ReportFolderPath) { 
+            $migrationStatus.ReportFolderPath 
+        } else { 
+            $LoggingSharePointMigration 
+        }
+        
+        # Create FailureSummaryReport2.csv (only if there are errors)
+        $summaryReportPath = New-FailureSummaryReport -MigrationErrors $migrationErrors -ReportFolderPath $reportFolder
+        
+        # Update LOG field and attach report (if any errors)
+        Write-Debug-Message "Updating LOG field and attaching report (if errors exist)..." "Cyan"
+        Add-MigrationReportAttachment -ListItem $ListItem -ReportPath $summaryReportPath -ReportFolderPath $reportFolder -TranscriptPath $TranscriptPath
+        
+        # Determine success based on errors
+        if ($fatalErrorFound -or $spmtFailed) {
+            $migrationSuccess = $false
+            Write-Host "Migration completed with FATAL ERRORS" -ForegroundColor Red
+            
+            # Build detailed error message for ScriptError field
+            $fatalErrorDetails = @()
+            foreach ($err in $migrationErrors) {
+                if ($err.Status -eq "FatalError" -and $err.Message) {
+                    $fatalErrorDetails += $err.Message
+                }
+            }
+            
+            if ($fatalErrorDetails.Count -gt 0) {
+                # Use actual FatalError messages instead of generic SPMT output
+                $detailedError = "[FATAL_ERROR] " + ($fatalErrorDetails | Select-Object -Unique | ForEach-Object { $_ } | Out-String).Trim()
+                Update-ListItemField -ListItem $ListItem -FieldName "ScriptError" -Value $detailedError
+                Write-Host "FatalError details: $detailedError" -ForegroundColor Red
+            }
+            elseif ($spmtErrorMsg) {
+                # Fall back to SPMT error message if no FatalError CSV found
+                Update-ListItemField -ListItem $ListItem -FieldName "ScriptError" -Value "[SPMT_ERROR] $spmtErrorMsg"
+            }
+        }
+        elseif ($migrationErrors.Count -gt 0) {
+            $migrationSuccess = $true  # Partial success - some items migrated
+            Write-Host "Migration completed with $($migrationErrors.Count) errors/skips" -ForegroundColor Yellow
+        }
+        else {
+            $migrationSuccess = $true
+            Write-Host "Migration completed successfully with no errors" -ForegroundColor Green
+        }
+        
+        # Clean up SPMT session
+        Invoke-SilentSPMTCommand { Unregister-SPMTMigration -ErrorAction SilentlyContinue }
+        
+    }
+    catch {
+        Write-Host "Migration failed with exception: $($_.Exception.Message)" -ForegroundColor Red
+        $migrationErrors += [PSCustomObject]@{
+            Status = "Exception"
+            "Item name" = "Migration Process"
+            Source = $SourcePath
+            Message = $_.Exception.Message
+            "Result category" = "Exception"
+        }
+        $fatalErrorFound = $true
+        
+        # Log exception error to list item
+        Update-ListItemError -ListItem $ListItem -ErrorMessage "Migration exception: $($_.Exception.Message)" -ErrorCategory "MIGRATION_EXCEPTION"
+        
+        # Clean up SPMT session
+        Invoke-SilentSPMTCommand { Unregister-SPMTMigration -ErrorAction SilentlyContinue }
+    }
+    
+    return @{
+        Success = $migrationSuccess
+        Errors = $migrationErrors
+        FatalError = $fatalErrorFound
+        ReportPath = $summaryReportPath
+        ReportFolderPath = if ($migrationStatus) { $migrationStatus.ReportFolderPath } else { $null }
+    }
+}
+
+#endregion
+
+#region ===== SHAREPOINT LIST FUNCTIONS =====
+
+# Function to update a single field in SharePoint list item with throttling protection
+function Update-ListItemField {
+    param (
+        [Parameter(Mandatory=$true)]
+        $ListItem,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$FieldName,
+        
+        [Parameter(Mandatory=$true)]
+        $Value
+    )
+    
+    $retryCount = 0
+    $maxRetries = 3
+    $success = $false
+    
+    while (-not $success -and $retryCount -lt $maxRetries) {
+        try {
+            Set-PnPListItem -List $listName -Identity $ListItem.Id -Values @{ $FieldName = $Value } -ErrorAction Stop
+            $success = $true
+            Write-Debug-Message "Updated $FieldName for item $($ListItem.Id)" "Green"
+        }
+        catch {
+            if ($_.Exception.Message -like "*throttled*" -or 
+                $_.Exception.Message -like "*429*" -or
+                $_.Exception.Message -like "*503*") {
+                
+                $retryCount++
+                $shouldRetry = Handle-SPOThrottling -RetryCount $retryCount -MaxRetries $maxRetries
+                
+                if (-not $shouldRetry) {
+                    Write-Host "Failed to update $FieldName after throttling retries" -ForegroundColor Red
+                    break
+                }
+            }
+            else {
+                Write-Host "Failed to update $FieldName`: $($_.Exception.Message)" -ForegroundColor Red
+                break
+            }
+        }
+    }
+    
+    return $success
+}
+
+# Function to update error field with categorization - APPENDS to existing errors (never overwrites)
+function Update-ListItemError {
+    param (
+        [Parameter(Mandatory=$true)]
+        $ListItem,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ErrorMessage,
+        
+        [string]$ErrorCategory = "GENERAL"
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $formattedError = "[$timestamp][$ErrorCategory] $ErrorMessage"
+    
+    # IMPORTANT: Refresh the list item to get current ScriptError value (prevents overwrites)
+    try {
+        $refreshedItem = Get-PnPListItem -List $listName -Id $ListItem.Id -ErrorAction Stop
+        $existingErrors = $refreshedItem["ScriptError"]
+    } catch {
+        # Fall back to cached value if refresh fails
+        $existingErrors = $ListItem["ScriptError"]
+        Write-Host "Warning: Could not refresh list item, using cached ScriptError value" -ForegroundColor Yellow
+    }
+    
+    # Append new error to existing errors (never overwrite)
+    if (-not [string]::IsNullOrWhiteSpace($existingErrors)) {
+        $formattedError = "$existingErrors`n$formattedError"
+    }
+    
+    $success = Update-ListItemField -ListItem $ListItem -FieldName "ScriptError" -Value $formattedError
+    
+    if ($success) {
+        Write-Host "Logged error to ScriptError field: [$ErrorCategory] $ErrorMessage" -ForegroundColor Yellow
+    }
+    
+    return $success
+}
+
+# Function to summarize migration errors by type (avoids 50k individual entries)
+# Groups similar errors and shows counts
+function Get-ErrorSummary {
+    param (
+        [Parameter(Mandatory=$true)]
+        [array]$MigrationErrors,
+        
+        [int]$MaxErrorTypes = 10  # Limit number of error types shown
+    )
+    
+    if (-not $MigrationErrors -or $MigrationErrors.Count -eq 0) {
+        return $null
+    }
+    
+    # Group errors by their message pattern (extract error reason after the colon or dash)
+    $errorGroups = @{}
+    
+    foreach ($err in $MigrationErrors) {
+        $msg = if ($err.Message) { $err.Message } else { "Unknown error" }
+        
+        # Extract error reason - take the part after common delimiters
+        $errorReason = $msg
+        
+        # Pattern: "filename - ErrorType:Reason" -> extract "ErrorType:Reason"
+        if ($msg -match "^[^-]+-\s*(.+)$") {
+            $errorReason = $Matches[1].Trim()
+        }
+        # Pattern: "Scan File Failure:reason" -> keep as is
+        # Pattern: "Status - message" -> extract message  
+        
+        # Normalize common error patterns
+        $key = switch -Regex ($errorReason) {
+            "Scan File Failure.*folder name is invalid"      { "Scan File Failure: Invalid folder name (_vti_*, etc.)" }
+            "Scan File Failure.*parent folder was not"       { "Scan File Failure: Parent folder not migrated" }
+            "Scan File Failure"                              { "Scan File Failure: $errorReason" -replace "Scan File Failure:\s*", "Scan File Failure: " }
+            "The file.*already exists"                       { "File already exists at destination" }
+            "Failed to query.*job status"                    { "Server processing timeout" }
+            "Access.*denied"                                 { "Access denied" }
+            default                                          { $errorReason.Substring(0, [Math]::Min(80, $errorReason.Length)) }
+        }
+        
+        if ($errorGroups.ContainsKey($key)) {
+            $errorGroups[$key]++
+        } else {
+            $errorGroups[$key] = 1
+        }
+    }
+    
+    # Build summary string
+    $totalErrors = $MigrationErrors.Count
+    $summary = "Total: $totalErrors errors/skips`n"
+    
+    # Sort by count descending and take top N
+    $topErrors = $errorGroups.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First $MaxErrorTypes
+    
+    foreach ($err in $topErrors) {
+        $summary += "  - $($err.Key): $($err.Value)`n"
+    }
+    
+    $remaining = $errorGroups.Count - $MaxErrorTypes
+    if ($remaining -gt 0) {
+        $summary += "  ... and $remaining other error types`n"
+    }
+    
+    $summary += "See FailureSummaryReport2.csv for full details"
+    
+    return $summary.Trim()
+}
+
+# ===== SCHEDULING CONFIGURATION =====
+# Large migration threshold (GB) - items with 7yr size over this only migrate on weekends/holidays
+# Set to 0 to disable this check (all sizes allowed any time)
+$LargeMigrationThresholdGB = 10  # Items >= 10GB only run Fri 5PM - Mon 4AM or holidays
+
+# Federal holidays where migrations are allowed all day (format: MM-dd)
+# Update this list annually as needed
+$script:HolidayDates = @(
+    # 2026 Federal Holidays
+    "01-01",  # New Year's Day
+    "01-19",  # MLK Day
+    "02-16",  # Presidents Day
+    "05-25",  # Memorial Day
+    "07-03",  # Independence Day (observed)
+    "09-07",  # Labor Day
+    "10-12",  # Columbus Day
+    "11-11",  # Veterans Day
+    "11-26",  # Thanksgiving
+    "11-27",  # Day after Thanksgiving
+    "12-25",  # Christmas
+    # 2027 Federal Holidays
+    "01-01",  # New Year's Day
+    "01-18",  # MLK Day
+    "02-15",  # Presidents Day
+    "05-31",  # Memorial Day
+    "07-05",  # Independence Day (observed)
+    "09-06",  # Labor Day
+    "10-11",  # Columbus Day
+    "11-11",  # Veterans Day
+    "11-25",  # Thanksgiving
+    "11-26",  # Day after Thanksgiving
+    "12-24"   # Christmas (observed)
+)
+
+# Timezone mappings (timezone column value -> TimeZoneInfo ID)
+$script:TimezoneMap = @{
+    "EST"     = "Eastern Standard Time"
+    "CST"     = "Central Standard Time"
+    "MST"     = "Mountain Standard Time"
+    "PST"     = "Pacific Standard Time"
+    "AKST"    = "Alaskan Standard Time"
+    "HST"     = "Hawaiian Standard Time"
+    "ANYTIME" = $null  # No timezone restriction
+}
+
+# Function to check if a migration item is within its allowed time window
+# Returns $true if OK to process now, $false if blocked by scheduling
+# Considers: TimeZone, ANYTIME, Holidays (+ next day until 4AM), Weekends (Fri 5PM - Mon 4AM), Large Migration Threshold
+function Test-InMigrationWindow {
+    param (
+        [Parameter(Mandatory=$true)]
+        $ListItem
+    )
+    
+    # Get item's timezone
+    $itemTimezone = if ($ListItem["TimeZone"]) { $ListItem["TimeZone"].ToString().Trim().ToUpper() } else { "" }
+    
+    # Get 7yr size in GB for large migration check
+    $size7YrGB = 0
+    if ($ListItem["Size7YrMB"]) {
+        $mb = 0
+        if ([double]::TryParse($ListItem["Size7YrMB"].ToString(), [ref]$mb)) {
+            $size7YrGB = $mb / 1024
+        }
+    }
+    $isLargeMigration = ($LargeMigrationThresholdGB -gt 0 -and $size7YrGB -ge $LargeMigrationThresholdGB)
+    
+    # If no timezone set, item is not schedulable - skip it
+    if ([string]::IsNullOrWhiteSpace($itemTimezone)) {
+        Write-Debug-Message "  -> SCHEDULE: No TimeZone set, skipping item" "DarkYellow"
+        return $false
+    }
+    
+    # ANYTIME = no restrictions (including large migrations)
+    if ($itemTimezone -eq "ANYTIME") {
+        Write-Debug-Message "  -> SCHEDULE: ANYTIME - allowed to process" "Green"
+        return $true
+    }
+    
+    # Look up timezone info
+    $tzId = $script:TimezoneMap[$itemTimezone]
+    if (-not $tzId) {
+        Write-Host "  -> SCHEDULE WARNING: Unknown timezone '$itemTimezone', skipping item" -ForegroundColor Yellow
+        return $false
+    }
+    
+    # Get current time in item's timezone
+    $tzInfo = [TimeZoneInfo]::FindSystemTimeZoneById($tzId)
+    $utcNow = [DateTime]::UtcNow
+    $localNow = [TimeZoneInfo]::ConvertTimeFromUtc($utcNow, $tzInfo)
+    
+    $dayOfWeek = $localNow.DayOfWeek
+    $hour = $localNow.Hour
+    $monthDay = $localNow.ToString("MM-dd")
+    $yesterdayMonthDay = $localNow.AddDays(-1).ToString("MM-dd")
+    
+    # Check if today is a holiday OR if yesterday was a holiday and it's before 4 AM
+    $isHoliday = ($script:HolidayDates -contains $monthDay)
+    $isHolidayOvernight = ($script:HolidayDates -contains $yesterdayMonthDay -and $hour -lt 4)
+    
+    if ($isHoliday -or $isHolidayOvernight) {
+        Write-Debug-Message "  -> SCHEDULE: Holiday window - allowed to process" "Green"
+        return $true
+    }
+    
+    # Weekend window: Fri 5PM through Mon 4AM (all sizes allowed)
+    $isFridayEvening = ($dayOfWeek -eq [DayOfWeek]::Friday -and $hour -ge 17)
+    $isSaturday = ($dayOfWeek -eq [DayOfWeek]::Saturday)
+    $isSunday = ($dayOfWeek -eq [DayOfWeek]::Sunday)
+    $isMondayEarlyMorning = ($dayOfWeek -eq [DayOfWeek]::Monday -and $hour -lt 4)
+    
+    if ($isFridayEvening -or $isSaturday -or $isSunday -or $isMondayEarlyMorning) {
+        Write-Debug-Message "  -> SCHEDULE: Weekend window (Fri 5PM - Mon 4AM) - allowed to process" "Green"
+        return $true
+    }
+    
+    # LARGE MIGRATION CHECK: Block large items outside weekend/holiday windows
+    # Large migrations (>=10GB) only run Fri 5PM - Mon 4AM, Holidays, or if ANYTIME
+    if ($isLargeMigration) {
+        Write-Debug-Message "  -> SCHEDULE: Blocked - Large migration ($([Math]::Round($size7YrGB, 1)) GB) only allowed weekends/holidays" "Yellow"
+        return $false
+    }
+    
+    # Regular size items (<10GB): Check if within allowed weeknight hours (5 PM - 4 AM local time)
+    # Blocked hours: 4 AM (04:00) to 5 PM (16:59) local time
+    # Allowed hours: 5 PM (17:00) to 4 AM (03:59) local time
+    if ($hour -ge 4 -and $hour -lt 17) {
+        Write-Debug-Message "  -> SCHEDULE: Blocked - $itemTimezone weekday $($localNow.ToString('HH:mm')) (business hours 4AM-5PM)" "Yellow"
+        return $false
+    }
+    
+    Write-Debug-Message "  -> SCHEDULE: Allowed - $itemTimezone $($localNow.ToString('HH:mm'))" "Green"
+    return $true
+}
+
+# Function to get items from SharePoint list for migration
+# Returns items that match migration type criteria AND marks them as Processing
+# Respects MaxItems limit to control batch size
+function Get-SPOListItems {
+    param (
+        [string]$MigrationType
+    )
+    
+    # Resolve effective MaxItems limit
+    # -1 = use config default, 0 = unlimited, >0 = explicit limit
+    $effectiveMaxItems = if ($MaxItems -eq -1) { $MaxItemsDefault } else { $MaxItems }
+    $maxItemsDisplay = if ($effectiveMaxItems -eq 0) { "unlimited" } else { $effectiveMaxItems.ToString() }
+    
+    # Scheduling tracking (for -UseScheduling mode)
+    $schedulingBlockedCount = 0
+    $script:LastScheduleBlockedCount = 0
+    
+    Write-Host "Getting items set for $MigrationType from SharePoint list (MaxItems: $maxItemsDisplay)" -ForegroundColor Cyan
+    if ($UseScheduling) {
+        Write-Host "Scheduling mode enabled - filtering by timezone windows" -ForegroundColor Cyan
+    }
+    
+    # Ensure PnP connection
+    if (-not (Ensure-PnPConnection -ForceReconnect)) {
+        Write-Host "Failed to establish PnP connection before accessing SharePoint list" -ForegroundColor Red
+        return $null
+    }
+    
+    $retryCount = 0
+    $maxRetries = 3
+    
+    while ($retryCount -lt $maxRetries) {
+        try {
+            # Get all list items
+            Write-Debug-Message "Retrieving list items (with throttling awareness)..." "Yellow"
+            $listItems = Get-PnPListItem -List $listName -PageSize 500 -ErrorAction Stop
+            
+            # Get current date for postpone filter
+            $currentDate = Get-Date
+            
+            # Filter based on migration type
+            $filteredItems = @()
+            $candidateItems = @()  # Collect candidates before priority sort
+            $itemIndex = 0
+            Write-Debug-Message "DEBUG: Processing $($listItems.Count) total list items..." "Gray"
+            
+            foreach ($item in $listItems) {
+                $itemIndex++
+                $migrate = if ($item["Migrate"]) { $item["Migrate"].ToString().Trim() } else { "" }
+                $processing = if ($item["Processing"]) { $item["Processing"].ToString().Trim() } else { "" }
+                $sourcePath = if ($item["SourcePath"]) { $item["SourcePath"].ToString().Trim() } else { "" }
+                
+                # Check multiple possible field names for TargetUrl (case variations)
+                $targetURL = ""
+                foreach ($urlFieldName in @("TargetUrl", "TargetURL", "targeturl", "Targeturl")) {
+                    if ($item[$urlFieldName]) {
+                        $targetURL = $item[$urlFieldName].ToString().Trim()
+                        break
+                    }
+                }
+                
+                # Debug output for first 5 items
+                if ($itemIndex -le 5) {
+                    Write-Debug-Message "DEBUG Item ${itemIndex}: Migrate='$migrate', Processing='$processing', Source='$sourcePath', Target='$targetURL'" "Gray"
+                }
+                
+                # Try to get postpone date
+                $postponeDate = $null
+                foreach ($fieldName in @("PostPone", "Postpone", "postpone", "POSTPONE")) {
+                    if ($null -ne $item[$fieldName]) {
+                        $postponeDate = $item[$fieldName]
+                        break
+                    }
+                }
+                
+                # Filter for Stage or Migrate based on selection
+                # Stage mode: looks for items with Migrate="Stage" only
+                # Migrate mode: looks for items with Migrate="Migrate" only
+                #   NOTE: "Staged" and "StagedWithErrors" are RESULTS - user must set to "Migrate" to proceed
+                # MigrateOnly mode: same as Migrate (kept for backwards compatibility)
+                # Both mode: picks up Stage OR Migrate items (for continuous scheduled tasks)
+                $matchesMigrationType = (
+                    ($MigrationType -eq "Stage" -and $migrate -eq "Stage") -or
+                    ($MigrationType -eq "Migrate" -and $migrate -eq "Migrate") -or
+                    ($MigrationType -eq "MigrateOnly" -and $migrate -eq "Migrate") -or
+                    ($MigrationType -eq "Both" -and ($migrate -eq "Stage" -or $migrate -eq "Migrate"))
+                )
+                
+                # Check if already being processed (prefix match for atomic claim IDs like Processing-SERVER-abc123)
+                $isBeingProcessed = ($processing -like "Processing*")
+                
+                # Debug: Show why item is being filtered
+                if ($itemIndex -le 10) {
+                    if (-not $matchesMigrationType) {
+                        Write-Debug-Message "  -> SKIPPED: Migrate='$migrate' doesn't match '$MigrationType' mode" "DarkGray"
+                    }
+                    if ($isBeingProcessed) {
+                        Write-Debug-Message "  -> SKIPPED: Already being processed" "DarkGray"
+                    }
+                    if ([string]::IsNullOrWhiteSpace($sourcePath)) {
+                        Write-Debug-Message "  -> SKIPPED: SourcePath is empty" "DarkGray"
+                    }
+                    # Note: We now include items with empty TargetUrl to mark them as ValidationFailed
+                }
+                
+                # Include items that match migration type, not being processed, and have source path
+                # We'll validate TargetUrl later and mark as ValidationFailed if empty
+                if ($matchesMigrationType -and 
+                    -not $isBeingProcessed -and
+                    -not [string]::IsNullOrWhiteSpace($sourcePath)) {
+                    
+                    # Postpone check
+                    if ($postponeDate -and $postponeDate -gt $currentDate) {
+                        $itemTitle = if ($item["Title"]) { $item["Title"] } else { $item["SourcePath"] }
+                        Write-Host "Filtering out $itemTitle - postponed until $($postponeDate.ToString('MM/dd/yyyy'))" -ForegroundColor Yellow
+                    }
+                    else {
+                        # Scheduling check (when -UseScheduling enabled)
+                        if ($UseScheduling) {
+                            if (-not (Test-InMigrationWindow -ListItem $item)) {
+                                $schedulingBlockedCount++
+                                continue
+                            }
+                        }
+                        
+                        # Add to candidates (claiming happens AFTER priority sort)
+                        $candidateItems += $item
+                    }
+                }
+            }
+            
+            # Update script-scope variable for Continuous loop to check
+            $script:LastScheduleBlockedCount = $schedulingBlockedCount
+            
+            Write-Debug-Message "Found $($candidateItems.Count) candidate items before priority sort" "Yellow"
+            
+            # Sort candidates by Priority (ASC: 1=highest) and QueuedAt/Modified (ASC: FIFO) BEFORE claiming
+            if ($UseScheduling -and $candidateItems.Count -gt 1) {
+                Write-Debug-Message "Sorting candidates by Priority (ASC: 1=highest), QueuedAt/Modified (ASC: FIFO)" "Yellow"
+                $candidateItems = @($candidateItems | Sort-Object @{Expression={
+                    if ($_["Priority"]) { [int]$_["Priority"] } else { 5 }  # Default priority 5 (low)
+                }; Ascending=$true}, @{Expression={
+                    # Use QueuedAt if set, otherwise fall back to Modified (when user set Migrate status)
+                    if ($_["QueuedAt"]) { $_["QueuedAt"] } else { $_["Modified"] }
+                }; Ascending=$true})
+                
+                # Debug: Show sorted order
+                Write-Debug-Message "Sorted order (top 5):" "Magenta"
+                $candidateItems | Select-Object -First 5 | ForEach-Object {
+                    $queuedAt = if ($_['QueuedAt']) { $_['QueuedAt'].ToString() } else { "(using Modified: $($_['Modified']))" }
+                    Write-Debug-Message "  ID: $($_.Id), Priority: $($_['Priority']), QueuedAt: $queuedAt" "Magenta"
+                }
+            }
+            
+            # Apply MaxItems limit AFTER sorting
+            if ($effectiveMaxItems -gt 0 -and $candidateItems.Count -gt $effectiveMaxItems) {
+                Write-Debug-Message "Limiting to top $effectiveMaxItems items after priority sort" "Yellow"
+                $candidateItems = @($candidateItems | Select-Object -First $effectiveMaxItems)
+            }
+            
+            # NOW claim the sorted/limited items
+            foreach ($item in $candidateItems) {
+                # ATOMIC CLAIM CHECK: Generate unique claim ID to verify ownership
+                $claimId = "Processing-$env:COMPUTERNAME-$([guid]::NewGuid().ToString().Substring(0,8))"
+                
+                # Step 1: Write unique claim (and stamp QueuedAt if blank for scheduling)
+                try {
+                    $claimValues = @{
+                        "Processing" = $claimId
+                        "Server" = $env:COMPUTERNAME
+                    }
+                    
+                    # Stamp QueuedAt if blank and scheduling is enabled
+                    if ($UseScheduling) {
+                        $existingQueuedAt = $item["QueuedAt"]
+                        if (-not $existingQueuedAt) {
+                            $claimValues["QueuedAt"] = [DateTime]::UtcNow
+                            Write-Debug-Message "Stamping QueuedAt for item $($item.Id)" "Yellow"
+                        }
+                    }
+                    
+                    Set-PnPListItem -List $listName -Identity $item.Id -Values $claimValues -ErrorAction Stop
+                    Write-Debug-Message "Wrote claim $claimId for item $($item.Id)" "Yellow"
+                }
+                catch {
+                    Write-Host "Warning: Could not write claim for item: $($_.Exception.Message)" -ForegroundColor Yellow
+                    continue
+                }
+                
+                # Step 2: Brief wait for any competing writes to settle
+                Start-Sleep -Milliseconds 500
+                
+                # Step 3: Re-read item to verify our claim stuck
+                try {
+                    $verifyItem = Get-PnPListItem -List $listName -Id $item.Id -ErrorAction Stop
+                    $currentClaim = if ($verifyItem["Processing"]) { $verifyItem["Processing"].ToString() } else { "" }
+                    
+                    # Step 4: Check if MY claim stuck
+                    if ($currentClaim -ne $claimId) {
+                        Write-Host "Lost claim on item $($item.Id) to another server (expected: $claimId, found: $currentClaim) - skipping" -ForegroundColor Yellow
+                        continue
+                    }
+                    
+                    Write-Debug-Message "Claim verified for item $($item.Id)" "Green"
+                }
+                catch {
+                    Write-Host "Warning: Could not verify claim for item $($item.Id): $($_.Exception.Message)" -ForegroundColor Yellow
+                    continue
+                }
+                
+                $filteredItems += $item
+            }
+            
+            $itemCount = $filteredItems.Count
+            
+            # Count total available (for reporting)
+            $totalAvailable = ($listItems | Where-Object {
+                $m = if ($_["Migrate"]) { $_["Migrate"].ToString().Trim() } else { "" }
+                $p = if ($_["Processing"]) { $_["Processing"].ToString().Trim() } else { "" }
+                $s = if ($_["SourcePath"]) { $_["SourcePath"].ToString().Trim() } else { "" }
+                (($MigrationType -eq "Stage" -and $m -eq "Stage") -or
+                 ($MigrationType -eq "Migrate" -and $m -eq "Migrate") -or
+                 ($MigrationType -eq "MigrateOnly" -and $m -eq "Migrate")) -and
+                $p -notlike "Processing*" -and -not [string]::IsNullOrWhiteSpace($s)
+            }).Count
+            
+            if ($effectiveMaxItems -gt 0 -and $totalAvailable -gt $itemCount) {
+                Write-Host "Found $itemCount items (limited by MaxItems=$effectiveMaxItems, $totalAvailable total available)" -ForegroundColor Green
+            } else {
+                Write-Host "Found $itemCount items set for $MigrationType" -ForegroundColor Green
+            }
+            
+            # Report scheduling blocked items
+            if ($UseScheduling -and $schedulingBlockedCount -gt 0) {
+                Write-Host "$schedulingBlockedCount items blocked by scheduling (outside their migration window)" -ForegroundColor Yellow
+            }
+            
+            # Return the filtered items as a simple ArrayList to prevent PowerShell array unwrapping issues
+            if ($itemCount -eq 0) {
+                return $null
+            }
+            
+            # Note: Items already sorted by Priority/QueuedAt BEFORE claiming (see candidateItems sort above)
+            
+            # Use Write-Output with -NoEnumerate to prevent unwrapping
+            Write-Output -NoEnumerate $filteredItems
+            return
+        }
+        catch {
+            if ($_.Exception.Message -like "*throttled*" -or 
+                $_.Exception.Message -like "*429*" -or
+                $_.Exception.Message -like "*503*") {
+                
+                $retryCount++
+                $shouldRetry = Handle-SPOThrottling -RetryCount $retryCount -MaxRetries $maxRetries -InitialWaitTimeSeconds 15
+                
+                if ($shouldRetry) {
+                    continue
+                }
+            }
+            
+            Write-Host "Error getting items from SharePoint list: $($_.Exception.Message)" -ForegroundColor Red
+            
+            # Try one more time with forced reconnection
+            Write-Host "Attempting one more connection..." -ForegroundColor Yellow
+            if (-not (Ensure-PnPConnection -ForceReconnect)) {
+                Write-Host "Failed to re-establish connection. Cannot access SharePoint list." -ForegroundColor Red
+                return $null
+            }
+        }
+    }
+    
+    Write-Host "Maximum retries exceeded when getting items from SharePoint list" -ForegroundColor Red
+    return $null
+}
+
+#endregion
+
+#region ===== POST-MIGRATION ACTIONS =====
+
+# Function to set source folder to read-only (Reacl) - RUNS AS BACKGROUND PROCESS
+# For Common Drives: Breaks inheritance, finds groups with "USER" in name and "Creator Owner",
+# changes them to ReadAndExecute. Only affects the specified folder and its contents.
+# SPO List column "Reacl" updated to "Updated" or "Failed"
+function Set-SourceReadOnly {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        $ListItem
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestampFile = Get-Date -Format "yyyyMMdd_HHmmss"
+    Write-Host "[$timestamp] REACL: Launching background process for: $SourcePath" -ForegroundColor Cyan
+    
+    # Verify path exists before launching background
+    if (-not (Test-Path $SourcePath)) {
+        $msg = "Source path no longer exists: $SourcePath"
+        Write-Host "[$timestamp] REACL: $msg" -ForegroundColor Yellow
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $msg -ErrorCategory "REACL"
+        Update-ListItemField -ListItem $ListItem -FieldName "Reacl" -Value "Failed"
+        return $false
+    }
+    
+    # Create the background ACL script for Common Drives
+    $aclScriptContent = @"
+param(
+    [string]`$SourcePath,
+    [string]`$LogFile,
+    [string]`$SiteUrl,
+    [string]`$ListName,
+    [int]`$ListItemId,
+    [switch]`$UseAppAuth,
+    [string]`$AppClientId,
+    [string]`$AppTenantId,
+    [string]`$AppCertThumbprint
+)
+
+`$ErrorActionPreference = "Continue"
+`$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+# Logging function
+function Write-Log {
+    param([string]`$Message, [string]`$Level = "INFO")
+    `$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    `$logLine = "[`$ts][`$Level] `$Message"
+    Add-Content -Path `$LogFile -Value `$logLine -ErrorAction SilentlyContinue
+    Write-Host `$logLine -ForegroundColor `$(switch(`$Level) { "ERROR" { "Red" } "WARN" { "Yellow" } "SUCCESS" { "Green" } default { "White" }})
+}
+
+Write-Log "Starting Common Drive ACL modification for: `$SourcePath"
+Write-Log "This folder will be set to read-only for all accounts except admins and svc-migration"
+
+`$success = `$true
+`$modifiedCount = 0
+`$errorCount = 0
+
+try {
+    # Step 1: Get current ACL and break inheritance (copy existing ACEs)
+    Write-Log "Step 1: Breaking inheritance and copying existing ACEs"
+    # Use -LiteralPath to handle brackets [] in path names
+    `$acl = Get-Acl -LiteralPath `$SourcePath
+    `$acl.SetAccessRuleProtection(`$true, `$true)  # Break inheritance, copy existing rules
+    Set-Acl -LiteralPath `$SourcePath -AclObject `$acl -ErrorAction Stop
+    Write-Log "Inheritance broken successfully" "SUCCESS"
+    
+    # Re-get ACL after breaking inheritance
+    `$acl = Get-Acl -LiteralPath `$SourcePath
+    
+    # Step 2: Find accounts with write permissions (excluding protected accounts)
+    Write-Log "Step 2: Finding non-admin accounts with write permissions"
+    `$rulesToRemove = @()
+    `$rulesToAdd = @()
+    
+    foreach (`$rule in `$acl.Access) {
+        `$identity = `$rule.IdentityReference.Value
+        `$rights = `$rule.FileSystemRights
+        
+        # Whitelist - accounts to PRESERVE write access (case-insensitive)
+        `$isProtectedAccount = (
+            `$identity -match "adm" -or                    # Admins, Administrators, Domain Admins, etc.
+            `$identity -match "svc-migration" -or          # Migration service account
+            `$identity -eq "NT AUTHORITY\SYSTEM" -or       # SYSTEM
+            `$identity -match "BUILTIN\\Administrators"   # Local Administrators group
+        )
+        
+        `$hasWritePermissions = `$rights -match "Write|Modify|FullControl|Delete"
+        
+        # Change to read-only if: has write access AND not a protected account
+        if (`$hasWritePermissions -and -not `$isProtectedAccount -and `$rule.AccessControlType -eq "Allow") {
+            Write-Log "  Found: `$identity with rights: `$rights - will change to ReadAndExecute"
+            `$rulesToRemove += `$rule
+            
+            # Create replacement rule with ReadAndExecute only
+            `$newRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                `$identity,
+                "ReadAndExecute",
+                `$rule.InheritanceFlags,
+                `$rule.PropagationFlags,
+                "Allow"
+            )
+            `$rulesToAdd += `$newRule
+        }
+    }
+    
+    if (`$rulesToRemove.Count -eq 0) {
+        Write-Log "No non-admin accounts with write permissions found" "WARN"
+    } else {
+        Write-Log "Found `$(`$rulesToRemove.Count) ACE(s) to modify"
+    }
+    
+    # Step 3: Apply ACL changes to root folder
+    Write-Log "Step 3: Applying ACL changes to root folder"
+    foreach (`$rule in `$rulesToRemove) {
+        `$acl.RemoveAccessRule(`$rule) | Out-Null
+    }
+    foreach (`$rule in `$rulesToAdd) {
+        `$acl.AddAccessRule(`$rule)
+    }
+    Set-Acl -LiteralPath `$SourcePath -AclObject `$acl -ErrorAction Stop
+    `$modifiedCount++
+    Write-Log "Root folder ACL updated successfully" "SUCCESS"
+    
+    # Step 4: Apply recursively to all subfolders and files
+    Write-Log "Step 4: Applying ACL changes recursively to subfolders and files"
+    `$items = Get-ChildItem -LiteralPath `$SourcePath -Recurse -Force -ErrorAction SilentlyContinue
+    `$totalItems = `$items.Count
+    `$current = 0
+    
+    Write-Log "Processing `$totalItems items..."
+    
+    foreach (`$item in `$items) {
+        `$current++
+        try {
+            # Get item ACL (use -LiteralPath for brackets)
+            `$itemAcl = Get-Acl -LiteralPath `$item.FullName -ErrorAction SilentlyContinue
+            
+            # Handle case where file was deleted between enumeration and now
+            if (-not `$itemAcl) {
+                Write-Log "Skipping (file no longer exists or ACL inaccessible): `$(`$item.FullName)" "WARN"
+                continue
+            }
+            
+            # Break inheritance if not already
+            if (-not `$itemAcl.AreAccessRulesProtected) {
+                `$itemAcl.SetAccessRuleProtection(`$true, `$true)
+            }
+            
+            # Find and modify USER/Creator Owner rules
+            `$itemRulesToRemove = @()
+            `$itemRulesToAdd = @()
+            
+            foreach (`$rule in `$itemAcl.Access) {
+                `$identity = `$rule.IdentityReference.Value
+                `$rights = `$rule.FileSystemRights
+                
+                # Whitelist - accounts to PRESERVE write access (case-insensitive)
+                `$isProtectedAccount = (
+                    `$identity -match "adm" -or                    # Admins, Administrators, Domain Admins, etc.
+                    `$identity -match "svc-migration" -or          # Migration service account
+                    `$identity -eq "NT AUTHORITY\SYSTEM" -or       # SYSTEM
+                    `$identity -match "BUILTIN\\Administrators"   # Local Administrators group
+                )
+                
+                `$hasWritePermissions = `$rights -match "Write|Modify|FullControl|Delete"
+                
+                # Change to read-only if: has write access AND not a protected account
+                if (`$hasWritePermissions -and -not `$isProtectedAccount -and `$rule.AccessControlType -eq "Allow") {
+                    `$itemRulesToRemove += `$rule
+                    
+                    `$newRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                        `$identity,
+                        "ReadAndExecute",
+                        `$rule.InheritanceFlags,
+                        `$rule.PropagationFlags,
+                        "Allow"
+                    )
+                    `$itemRulesToAdd += `$newRule
+                }
+            }
+            
+            if (`$itemRulesToRemove.Count -gt 0) {
+                foreach (`$rule in `$itemRulesToRemove) {
+                    `$itemAcl.RemoveAccessRule(`$rule) | Out-Null
+                }
+                foreach (`$rule in `$itemRulesToAdd) {
+                    `$itemAcl.AddAccessRule(`$rule)
+                }
+                Set-Acl -LiteralPath `$item.FullName -AclObject `$itemAcl -ErrorAction Stop
+            }
+            
+            `$modifiedCount++
+            
+            if (`$current % 100 -eq 0) {
+                Write-Log "Processed `$current of `$totalItems items..."
+            }
+        }
+        catch {
+            `$errorCount++
+            Write-Log "Failed to update ACL on: `$(`$item.FullName) - `$(`$_.Exception.Message)" "ERROR"
+        }
+    }
+    
+    Write-Log "ACL modification completed: `$modifiedCount items processed, `$errorCount errors" "SUCCESS"
+    
+    # Update SPO list with final status
+    Write-Log "Updating SharePoint list item status..."
+    try {
+        Import-Module PnP.PowerShell -ErrorAction Stop
+        
+        if (`$UseAppAuth) {
+            Connect-PnPOnline -Url `$SiteUrl -ClientId `$AppClientId -Tenant `$AppTenantId -Thumbprint `$AppCertThumbprint -ErrorAction Stop
+        } else {
+            Connect-PnPOnline -Url `$SiteUrl -Interactive -ErrorAction Stop
+        }
+        
+        Set-PnPListItem -List `$ListName -Identity `$ListItemId -Values @{ "Reacl" = "Updated" } -ErrorAction Stop
+        Write-Log "SharePoint list updated: Reacl = Updated" "SUCCESS"
+        
+        Disconnect-PnPOnline -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Log "Failed to update SharePoint list: `$(`$_.Exception.Message)" "ERROR"
+        `$success = `$false
+    }
+}
+catch {
+    Write-Log "CRITICAL ERROR: `$(`$_.Exception.Message)" "ERROR"
+    `$success = `$false
+    
+    # Try to update SPO list with failure AND ScriptError
+    try {
+        Import-Module PnP.PowerShell -ErrorAction SilentlyContinue
+        if (`$UseAppAuth) {
+            Connect-PnPOnline -Url `$SiteUrl -ClientId `$AppClientId -Tenant `$AppTenantId -Thumbprint `$AppCertThumbprint -ErrorAction SilentlyContinue
+        } else {
+            Connect-PnPOnline -Url `$SiteUrl -Interactive -ErrorAction SilentlyContinue
+        }
+        
+        `$errorMsg = "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][REACL] `$(`$_.Exception.Message)"
+        Set-PnPListItem -List `$ListName -Identity `$ListItemId -Values @{
+            "Reacl" = "Failed"
+            "ScriptError" = `$errorMsg
+        } -ErrorAction SilentlyContinue
+        
+        Disconnect-PnPOnline -ErrorAction SilentlyContinue
+    } catch { }
+}
+
+Write-Host "`nReacl process complete. Window will close in 5 seconds..." -ForegroundColor Green
+Start-Sleep -Seconds 5
+"@
+    
+    # Save script to temp file
+    $scriptPath = Join-Path $TempPath "Reacl_$timestampFile`_$($ListItem.Id).ps1"
+    $logPath = Join-Path $TempPath "Reacl_$timestampFile`_$($ListItem.Id).log"
+    $aclScriptContent | Out-File -FilePath $scriptPath -Encoding UTF8
+    
+    # Build arguments for background process
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -SourcePath `"$SourcePath`" -LogFile `"$logPath`" -SiteUrl `"$siteUrl`" -ListName `"$listName`" -ListItemId $($ListItem.Id)"
+    
+    if ($UseAppAuth) {
+        $arguments += " -UseAppAuth -AppClientId `"$AppClientId`" -AppTenantId `"$AppTenantId`" -AppCertThumbprint `"$AppCertificateThumbprint`""
+    }
+    
+    # Launch as background process
+    try {
+        $process = Start-Process "powershell.exe" -ArgumentList $arguments -WindowStyle Minimized -PassThru
+        
+        if ($process -and $process.Id) {
+            Write-Host "[$timestamp] REACL: Background process started (PID: $($process.Id))" -ForegroundColor Green
+            Write-Host "[$timestamp] REACL: Log file: $logPath" -ForegroundColor Gray
+            return $true
+        } else {
+            throw "Failed to start background process"
+        }
+    }
+    catch {
+        $errorMsg = "Failed to launch background ACL process: $($_.Exception.Message)"
+        Write-Host "[$timestamp] REACL ERROR: $errorMsg" -ForegroundColor Red
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "REACL"
+        Update-ListItemField -ListItem $ListItem -FieldName "Reacl" -Value "Failed"
+        return $false
+    }
+}
+
+# Function to delete source folder (DeleteSource) - Full folder deletion
+# ONLY called after confirmed successful migration AND only if explicitly requested - fully logged
+function Remove-SourceFolder {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        $ListItem
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$timestamp] DELETE_SOURCE: Starting FULL delete operation for: $SourcePath" -ForegroundColor Cyan
+    Write-Host "[$timestamp] DELETE_SOURCE WARNING: This action is irreversible!" -ForegroundColor Red
+    
+    # Log the attempt
+    Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Processing Full Delete"
+    
+    try {
+        # Verify path exists
+        if (-not (Test-Path $SourcePath)) {
+            $msg = "Source path no longer exists (already deleted): $SourcePath"
+            Write-Host "[$timestamp] DELETE_SOURCE: $msg" -ForegroundColor Yellow
+            Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Already Deleted $timestamp"
+            return $true
+        }
+        
+        # Get folder size for logging
+        $folderSize = (Get-ChildItem -Path $SourcePath -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $folderSizeMB = [math]::Round($folderSize / 1MB, 2)
+        Write-Host "[$timestamp] DELETE_SOURCE: Folder size: $folderSizeMB MB" -ForegroundColor Gray
+        
+        # Remove the folder and all contents
+        Remove-Item -Path $SourcePath -Recurse -Force -ErrorAction Stop
+        
+        $completedTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Write-Host "[$completedTime] DELETE_SOURCE: Successfully deleted $SourcePath ($folderSizeMB MB)" -ForegroundColor Green
+        
+        # Update SharePoint list with timestamp
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Deleted $completedTime"
+        
+        return $true
+    }
+    catch {
+        $errorTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $errorMsg = "Failed to delete source: $($_.Exception.Message)"
+        Write-Host "[$errorTime] DELETE_SOURCE ERROR: $errorMsg" -ForegroundColor Red
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "DELETE_SOURCE"
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Failed $errorTime"
+        return $false
+    }
+}
+
+# Function to launch source deletion in a NEW WINDOW (separate process)
+# Opens a new PowerShell window, reads ItemReport CSV(s), deletes files with Status='Migrated'
+# Creates DeletionReport.csv documenting what was deleted
+# Returns the path to the deletion report
+function Start-SourceDeletionInNewWindow {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ReportFolderPath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$SiteUrl,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ListName,
+        
+        [Parameter(Mandatory=$true)]
+        [int]$ListItemId,
+        
+        # App Authentication parameters (optional, for scheduled task mode)
+        [Parameter(Mandatory=$false)]
+        [bool]$UseAppAuth = $false,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$AppClientId = "",
+        
+        [Parameter(Mandatory=$false)]
+        [string]$AppTenantId = "",
+        
+        [Parameter(Mandatory=$false)]
+        [string]$AppCertThumbprint = "",
+        
+        [Parameter(Mandatory=$false)]
+        [string]$AzureEnv = "USGovernmentHigh"
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestampFile = Get-Date -Format "yyyyMMdd_HHmmss"
+    Write-Host "[$timestamp] SOURCE_DELETION: Launching source deletion in new window for: $SourcePath" -ForegroundColor Cyan
+    
+    # Create the deletion report path
+    $deletionReportPath = Join-Path $ReportFolderPath "DeletionReport_$timestampFile.csv"
+    $deletionLogPath = Join-Path $TempPath "SourceDeletion_$timestampFile`_$ListItemId.log"
+    
+    # Create the deletion script content
+    $deletionScriptContent = @"
+# Source Deletion Script - Runs in separate window
+# Reads ItemReport CSVs, deletes files with Status='Success', creates deletion report
+
+param(
+    [string]`$SourcePath,
+    [string]`$ReportFolderPath,
+    [string]`$DeletionReportPath,
+    [string]`$LogPath,
+    [string]`$SiteUrl,
+    [string]`$ListName,
+    [int]`$ListItemId,
+    [switch]`$UseAppAuth,
+    [string]`$AppClientId = "",
+    [string]`$AppTenantId = "",
+    [string]`$AppCertThumbprint = ""
+)
+
+# Trap errors - log and exit (avoid ReadKey which fails in non-interactive)
+trap {
+    Write-Host "SCRIPT ERROR: `$_" -ForegroundColor Red
+    # Try to log the error
+    try {
+        if (`$LogPath) {
+            Add-Content -Path `$LogPath -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][ERROR] TRAP: `$_" -ErrorAction SilentlyContinue
+        }
+    } catch {}
+    Start-Sleep -Seconds 5
+    exit 1
+}
+
+`$ErrorActionPreference = "Continue"
+
+# Ensure log directory exists
+`$logDir = Split-Path `$LogPath -Parent
+if (-not (Test-Path `$logDir)) {
+    New-Item -Path `$logDir -ItemType Directory -Force | Out-Null
+}
+
+# Logging function
+function Write-Log {
+    param([string]`$Message, [string]`$Level = "INFO")
+    `$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    `$logLine = "[`$ts][`$Level] `$Message"
+    Write-Host `$logLine -ForegroundColor `$(switch(`$Level) { "ERROR" { "Red" } "WARN" { "Yellow" } "SUCCESS" { "Green" } default { "White" }})
+    Add-Content -Path `$LogPath -Value `$logLine -ErrorAction SilentlyContinue
+}
+
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host "Source Deletion Process" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Source Path: `$SourcePath" -ForegroundColor Yellow
+Write-Host "Report Folder: `$ReportFolderPath" -ForegroundColor Yellow
+Write-Host "Deletion Report: `$DeletionReportPath" -ForegroundColor Yellow
+Write-Host ""
+
+Write-Log "Starting source deletion process"
+Write-Log "Source: `$SourcePath"
+
+# Initialize deletion tracking
+`$deletedFiles = @()
+`$failedDeletes = @()
+`$skippedFiles = @()
+`$deletedCount = 0
+`$failedCount = 0
+`$skippedCount = 0
+`$totalSizeDeleted = 0
+
+try {
+    # Find all ItemReport files in TaskReport folders
+    `$taskReportFolders = Get-ChildItem -Path `$ReportFolderPath -Directory -ErrorAction SilentlyContinue | Where-Object { `$_.Name -like "TaskReport_*" }
+    
+    if (-not `$taskReportFolders) {
+        Write-Log "No TaskReport folders found in `$ReportFolderPath" "WARN"
+        `$taskReportFolders = @()
+    }
+    
+    `$allItemReports = @()
+    
+    foreach (`$taskFolder in `$taskReportFolders) {
+        `$itemReports = Get-ChildItem -Path `$taskFolder.FullName -File -Filter "ItemReport_R1*.csv" -ErrorAction SilentlyContinue
+        if (`$itemReports) {
+            `$allItemReports += `$itemReports
+        }
+    }
+    
+    if (`$allItemReports.Count -eq 0) {
+        Write-Log "No ItemReport CSV files found! Cannot proceed with deletion." "ERROR"
+        Write-Host "`nNo ItemReport files found. Exiting..." -ForegroundColor Red
+        Start-Sleep -Seconds 5
+        exit 1
+    }
+    
+    Write-Log "Found `$(`$allItemReports.Count) ItemReport file(s) to process"
+    
+    # Process each ItemReport
+    foreach (`$report in `$allItemReports) {
+        Write-Log "Processing report: `$(`$report.Name)"
+        
+        try {
+            `$reportItems = Import-Csv `$report.FullName -ErrorAction Stop
+            
+            foreach (`$item in `$reportItems) {
+                # Only process files (not folders) with Status = "Success" or "Migrated"
+                `$status = `$item.Status
+                `$itemType = `$item.Type  # Column name is "Type" not "Item type"
+                `$itemSourcePath = `$item.Source  # RENAMED: was $sourcePath, which overwrote the param!
+                
+                # Debug: Log each item being processed
+                Write-Log "  Item: Type='`$itemType', Status='`$status', Source='`$itemSourcePath'"
+                
+                # Check if this is a successfully migrated file
+                # Also include "Skipped" with specific messages that indicate content already at destination
+                `$isSuccessful = `$status -eq "Success" -or `$status -eq "Migrated"
+                `$isSkippedOK = `$status -eq "Skipped" -and (`$item.Message -like "*destination has newer*" -or `$item.Message -like "*already exists*")
+                
+                if (`$itemType -eq "File" -and (`$isSuccessful -or `$isSkippedOK)) {
+                    # Use -LiteralPath to handle brackets [] in filenames
+                    if (Test-Path -LiteralPath `$itemSourcePath -PathType Leaf) {
+                        try {
+                            # Get file info before deletion (use -LiteralPath for brackets)
+                            `$fileInfo = Get-Item -LiteralPath `$itemSourcePath -ErrorAction Stop
+                            `$fileSize = `$fileInfo.Length
+                            `$lastModified = `$fileInfo.LastWriteTime
+                            
+                            # Delete the file (use -LiteralPath for brackets)
+                            Remove-Item -LiteralPath `$itemSourcePath -Force -ErrorAction Stop
+                            
+                            `$deletedCount++
+                            `$totalSizeDeleted += `$fileSize
+                            
+                            # Record deletion
+                            `$deletedFiles += [PSCustomObject]@{
+                                Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                                Action = "Deleted"
+                                FilePath = `$itemSourcePath
+                                FileSize = `$fileSize
+                                FileSizeMB = [math]::Round(`$fileSize / 1MB, 2)
+                                LastModified = `$lastModified.ToString("yyyy-MM-dd HH:mm:ss")
+                                OriginalStatus = `$status
+                                Result = "Success"
+                                ErrorMessage = ""
+                            }
+                            
+                            # Progress update every 50 files
+                            if (`$deletedCount % 50 -eq 0) {
+                                Write-Log "Deleted `$deletedCount files so far..."
+                            }
+                        }
+                        catch {
+                            `$failedCount++
+                            Write-Log "Failed to delete: `$itemSourcePath - `$(`$_.Exception.Message)" "ERROR"
+                            
+                            `$failedDeletes += [PSCustomObject]@{
+                                Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                                Action = "DeleteFailed"
+                                FilePath = `$itemSourcePath
+                                FileSize = 0
+                                FileSizeMB = 0
+                                LastModified = ""
+                                OriginalStatus = `$status
+                                Result = "Failed"
+                                ErrorMessage = `$_.Exception.Message
+                            }
+                        }
+                    }
+                    else {
+                        # File doesn't exist (already deleted or moved)
+                        `$skippedCount++
+                        `$skippedFiles += [PSCustomObject]@{
+                            Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                            Action = "Skipped"
+                            FilePath = `$itemSourcePath
+                            FileSize = 0
+                            FileSizeMB = 0
+                            LastModified = ""
+                            OriginalStatus = `$status
+                            Result = "NotFound"
+                            ErrorMessage = "File not found at source"
+                        }
+                    }
+                }
+                elseif (`$itemType -eq "File") {
+                    # File was not successfully migrated - skip deletion
+                    `$skippedCount++
+                    `$skippedFiles += [PSCustomObject]@{
+                        Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                        Action = "Skipped"
+                        FilePath = `$itemSourcePath
+                        FileSize = 0
+                        FileSizeMB = 0
+                        LastModified = ""
+                        OriginalStatus = `$status
+                        Result = "NotMigrated"
+                        ErrorMessage = "Status was '$status' - not eligible for deletion"
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Log "Error reading report `$(`$report.Name): `$(`$_.Exception.Message)" "ERROR"
+        }
+    }
+    
+    # ===== EMPTY FOLDER CLEANUP (SAFETY-CRITICAL) =====
+    # This section uses TRIPLE-CHECK verification before deleting any folder
+    # WARNING: This is irreversible - there are NO BACKUPS!
+    Write-Log "===== EMPTY FOLDER CLEANUP =====" "INFO"
+    Write-Log "Starting empty folder cleanup (bottom-up, triple-verified)"
+    Write-Log "DEBUG: SourcePath = '`$SourcePath'"
+    `$emptyDirsRemoved = 0
+    `$emptyDirsSkipped = 0
+    `$emptyDirsFailed = 0
+    `$emptyFolderRecords = @()
+    
+    # Use -LiteralPath to handle brackets [] in folder names
+    `$sourcePathExists = Test-Path -LiteralPath `$SourcePath
+    Write-Log "DEBUG: Test-Path result = `$sourcePathExists"
+    
+    if (`$sourcePathExists) {
+        Write-Log "Analyzing folder structure..."
+        `$directories = Get-ChildItem -LiteralPath `$SourcePath -Directory -Recurse -ErrorAction SilentlyContinue | 
+            Sort-Object { `$_.FullName.Split('\').Count } -Descending
+        
+        Write-Log "Found `$(`$directories.Count) subdirectories to analyze"
+        
+        foreach (`$dir in `$directories) {
+            `$folderPath = `$dir.FullName
+            
+            # TRIPLE-CHECK: Verify folder is TRULY empty before deletion
+            # Check 1: Get ALL items including hidden and system files
+            `$check1 = @(Get-ChildItem -LiteralPath `$folderPath -Force -ErrorAction SilentlyContinue)
+            `$fileCount = @(`$check1 | Where-Object { -not `$_.PSIsContainer }).Count
+            `$subDirCount = @(`$check1 | Where-Object { `$_.PSIsContainer }).Count
+            `$totalItems = `$check1.Count
+            
+            if (`$totalItems -eq 0 -and `$fileCount -eq 0 -and `$subDirCount -eq 0) {
+                # Check 2: Verify AGAIN right before deletion (race condition protection)
+                `$check2 = @(Get-ChildItem -LiteralPath `$folderPath -Force -ErrorAction SilentlyContinue)
+                
+                if (`$check2.Count -eq 0) {
+                    # Check 3: Final verification
+                    `$check3 = @(Get-ChildItem -LiteralPath `$folderPath -Force -ErrorAction SilentlyContinue)
+                    
+                    if (`$check3.Count -eq 0) {
+                        # VERIFIED EMPTY - Safe to delete
+                        try {
+                            Remove-Item -LiteralPath `$folderPath -Force -ErrorAction Stop
+                            `$emptyDirsRemoved++
+                            Write-Log "DELETED empty folder: `$folderPath"
+                            `$emptyFolderRecords += [PSCustomObject]@{
+                                Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                                Action = "EmptyFolderDeleted"
+                                FilePath = `$folderPath
+                                FileSize = 0
+                                FileSizeMB = 0
+                                LastModified = ""
+                                OriginalStatus = "Empty"
+                                Result = "Deleted"
+                                ErrorMessage = ""
+                            }
+                            
+                            # Log progress every 25 folders
+                            if (`$emptyDirsRemoved % 25 -eq 0) {
+                                Write-Log "Deleted `$emptyDirsRemoved empty folders so far..."
+                            }
+                        }
+                        catch {
+                            `$emptyDirsFailed++
+                            `$emptyFolderRecords += [PSCustomObject]@{
+                                Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                                Action = "EmptyFolderDeleteFailed"
+                                FilePath = `$folderPath
+                                FileSize = 0
+                                FileSizeMB = 0
+                                LastModified = ""
+                                OriginalStatus = "Empty"
+                                Result = "Failed"
+                                ErrorMessage = `$_.Exception.Message
+                            }
+                            Write-Log "Failed to delete empty folder: `$folderPath - `$(`$_.Exception.Message)" "WARN"
+                        }
+                    } else {
+                        # RACE CONDITION: Items appeared between check2 and check3!
+                        `$emptyDirsSkipped++
+                        `$emptyFolderRecords += [PSCustomObject]@{
+                            Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                            Action = "EmptyFolderSkipped"
+                            FilePath = `$folderPath
+                            FileSize = 0
+                            FileSizeMB = 0
+                            LastModified = ""
+                            OriginalStatus = "RaceCondition"
+                            Result = "Skipped"
+                            ErrorMessage = "Items appeared during verification (check3): `$(`$check3.Count) items"
+                        }
+                        Write-Log "RACE CONDITION: Skipping folder that gained items: `$folderPath" "WARN"
+                    }
+                } else {
+                    # Items appeared between check1 and check2
+                    `$emptyDirsSkipped++
+                }
+            } else {
+                # Folder is not empty - this is expected, don't log every one
+                `$emptyDirsSkipped++
+            }
+        }
+        
+        # Check if root is now empty (with same triple-check)
+        Write-Log "Checking if root folder is empty..."
+        `$rootCheck1 = @(Get-ChildItem -LiteralPath `$SourcePath -Force -ErrorAction SilentlyContinue)
+        
+        if (`$rootCheck1.Count -eq 0) {
+            `$rootCheck2 = @(Get-ChildItem -LiteralPath `$SourcePath -Force -ErrorAction SilentlyContinue)
+            
+            if (`$rootCheck2.Count -eq 0) {
+                `$rootCheck3 = @(Get-ChildItem -LiteralPath `$SourcePath -Force -ErrorAction SilentlyContinue)
+                
+                if (`$rootCheck3.Count -eq 0) {
+                    try {
+                        Remove-Item -LiteralPath `$SourcePath -Force -ErrorAction Stop
+                        `$emptyDirsRemoved++
+                        Write-Log "ROOT FOLDER DELETED - Source completely cleaned up!" "SUCCESS"
+                        `$emptyFolderRecords += [PSCustomObject]@{
+                            Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                            Action = "RootFolderDeleted"
+                            FilePath = `$SourcePath
+                            FileSize = 0
+                            FileSizeMB = 0
+                            LastModified = ""
+                            OriginalStatus = "Empty"
+                            Result = "Deleted"
+                            ErrorMessage = ""
+                        }
+                    }
+                    catch {
+                        `$emptyDirsFailed++
+                        Write-Log "Could not remove root folder: `$(`$_.Exception.Message)" "WARN"
+                    }
+                } else {
+                    Write-Log "Root folder has content - not deleted (`$(`$rootCheck3.Count) items remain)" "INFO"
+                }
+            }
+        } else {
+            Write-Log "Root folder still has `$(`$rootCheck1.Count) items - not empty" "INFO"
+        }
+        
+        Write-Log "Empty folder cleanup complete: Deleted `$emptyDirsRemoved, Skipped `$emptyDirsSkipped, Failed `$emptyDirsFailed" "SUCCESS"
+    }
+    
+    # Combine all records for the deletion report (including empty folder records)
+    `$allRecords = @()
+    `$allRecords += `$deletedFiles
+    `$allRecords += `$failedDeletes
+    `$allRecords += `$skippedFiles
+    `$allRecords += `$emptyFolderRecords
+    
+    # Export deletion report
+    if (`$allRecords.Count -gt 0) {
+        `$allRecords | Export-Csv -Path `$DeletionReportPath -NoTypeInformation -Encoding UTF8
+        Write-Log "Deletion report saved to: `$DeletionReportPath" "SUCCESS"
+    }
+    
+    # Calculate totals
+    `$totalSizeMB = [math]::Round(`$totalSizeDeleted / 1MB, 2)
+    
+    # Summary
+    Write-Host "`n=============================================" -ForegroundColor Cyan
+    Write-Host "DELETION SUMMARY" -ForegroundColor Cyan
+    Write-Host "=============================================" -ForegroundColor Cyan
+    Write-Host "Files Deleted: `$deletedCount (`$totalSizeMB MB)" -ForegroundColor Green
+    Write-Host "Files Failed: `$failedCount" -ForegroundColor `$(if(`$failedCount -gt 0){"Red"}else{"Gray"})
+    Write-Host "Files Skipped: `$skippedCount (not migrated or not found)" -ForegroundColor Yellow
+    Write-Host "---------------------------------------------" -ForegroundColor Gray
+    Write-Host "Empty Folders Deleted: `$emptyDirsRemoved (triple-verified)" -ForegroundColor Green
+    Write-Host "Empty Folders Skipped: `$emptyDirsSkipped (not empty)" -ForegroundColor Gray
+    Write-Host "Empty Folders Failed: `$emptyDirsFailed" -ForegroundColor `$(if(`$emptyDirsFailed -gt 0){"Red"}else{"Gray"})
+    Write-Host "---------------------------------------------" -ForegroundColor Gray
+    Write-Host "Deletion Report: `$DeletionReportPath" -ForegroundColor Cyan
+    Write-Host "=============================================" -ForegroundColor Cyan
+    
+    Write-Log "SUMMARY: Files(Deleted=`$deletedCount/`$totalSizeMB MB, Failed=`$failedCount, Skipped=`$skippedCount) EmptyFolders(Deleted=`$emptyDirsRemoved, Skipped=`$emptyDirsSkipped, Failed=`$emptyDirsFailed)" "SUCCESS"
+    
+    # Now update the SharePoint list with the deletion report
+    # IMPORTANT: Wait before updating to avoid save conflict with main script
+    Write-Host "`nWaiting 10 seconds before updating SharePoint (avoid save conflict)..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
+    Write-Host "Updating SharePoint list item..." -ForegroundColor Cyan
+    
+    try {
+        # Import PnP module
+        Import-Module PnP.PowerShell -ErrorAction Stop
+        
+        # Connect to SharePoint using App Auth or Saved Credentials
+        Write-Log "Connecting to SharePoint: `$SiteUrl"
+        if (`$UseAppAuth) {
+            Write-Log "Using App-Only authentication (certificate)..."
+            # Note: Omit -AzureEnvironment for USSec - PnP auto-detects from .scloud URL
+            Connect-PnPOnline -Url `$SiteUrl -ClientId `$AppClientId -Tenant `$AppTenantId -Thumbprint `$AppCertThumbprint -ErrorAction Stop
+        }
+        else {
+            Write-Log "Using saved credentials..."
+            `$cred = Import-Clixml -Path `$CredentialPath
+            Connect-PnPOnline -Url `$SiteUrl -Credentials `$cred -ErrorAction Stop
+        }
+        Write-Log "Connected to SharePoint: `$SiteUrl"
+        
+        # Update DeleteSource field with summary - retry logic for save conflicts
+        `$deleteStatus = "Files: `$deletedCount (`$totalSizeMB MB)"
+        if (`$failedCount -gt 0) {
+            `$deleteStatus += ", `$failedCount failed"
+        }
+        if (`$emptyDirsRemoved -gt 0) {
+            `$deleteStatus += " | Folders: `$emptyDirsRemoved removed"
+        }
+        if (`$emptyDirsFailed -gt 0) {
+            `$deleteStatus += ", `$emptyDirsFailed failed"
+        }
+        `$deleteStatus += " - `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        
+        `$maxRetries = 3
+        `$retryCount = 0
+        `$updateSuccess = `$false
+        
+        while (-not `$updateSuccess -and `$retryCount -lt `$maxRetries) {
+            `$retryCount++
+            try {
+                Set-PnPListItem -List `$ListName -Identity `$ListItemId -Values @{
+                    "DeleteSource" = `$deleteStatus
+                } -ErrorAction Stop
+                `$updateSuccess = `$true
+                Write-Log "Updated DeleteSource field"
+            }
+            catch {
+                if (`$_.Exception.Message -like "*conflict*" -or `$_.Exception.Message -like "*save conflict*") {
+                    Write-Log "Save conflict on attempt `$retryCount - waiting and retrying..." "WARN"
+                    Start-Sleep -Seconds (5 * `$retryCount)
+                }
+                else {
+                    throw
+                }
+            }
+        }
+        
+        if (-not `$updateSuccess) {
+            Write-Log "Failed to update DeleteSource after `$maxRetries attempts" "ERROR"
+        }
+        
+        # Attach the deletion report to the list item (only if it has records) - with retry
+        if ((Test-Path `$DeletionReportPath) -and (Get-Content `$DeletionReportPath -ErrorAction SilentlyContinue)) {
+            `$fileName = Split-Path `$DeletionReportPath -Leaf
+            `$attachRetry = 0
+            `$attachSuccess = `$false
+            
+            while (-not `$attachSuccess -and `$attachRetry -lt `$maxRetries) {
+                `$attachRetry++
+                try {
+                    Add-PnPListItemAttachment -List `$ListName -Identity `$ListItemId -Path `$DeletionReportPath -ErrorAction Stop
+                    `$attachSuccess = `$true
+                    Write-Log "Attached deletion report: `$fileName" "SUCCESS"
+                }
+                catch {
+                    if (`$_.Exception.Message -like "*conflict*") {
+                        Write-Log "Save conflict attaching report (attempt `$attachRetry) - retrying..." "WARN"
+                        Start-Sleep -Seconds (5 * `$attachRetry)
+                    }
+                    else {
+                        throw
+                    }
+                }
+            }
+            
+            if (-not `$attachSuccess) {
+                Write-Log "Failed to attach deletion report after `$maxRetries attempts" "ERROR"
+            }
+        } else {
+            Write-Log "No deletion report to attach (no files processed)" "WARN"
+        }
+        
+        Disconnect-PnPOnline -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Log "Error updating SharePoint: `$(`$_.Exception.Message)" "ERROR"
+    }
+}
+catch {
+    Write-Log "CRITICAL ERROR: `$(`$_.Exception.Message)" "ERROR"
+    
+    # Try to update SPO list with failure AND ScriptError
+    try {
+        Import-Module PnP.PowerShell -ErrorAction SilentlyContinue
+        if (`$UseAppAuth) {
+            Connect-PnPOnline -Url `$SiteUrl -ClientId `$AppClientId -Tenant `$AppTenantId -Thumbprint `$AppCertThumbprint -ErrorAction SilentlyContinue
+        } else {
+            `$cred = Import-Clixml -Path `$CredentialPath
+            Connect-PnPOnline -Url `$SiteUrl -Credentials `$cred -ErrorAction SilentlyContinue
+        }
+        
+        `$errorMsg = "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][DELETION] `$(`$_.Exception.Message)"
+        Set-PnPListItem -List `$ListName -Identity `$ListItemId -Values @{
+            "DeleteSource" = "Failed - `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            "ScriptError" = `$errorMsg
+        } -ErrorAction SilentlyContinue
+        
+        Disconnect-PnPOnline -ErrorAction SilentlyContinue
+    } catch { }
+}
+
+Write-Host "`n" -ForegroundColor White
+Write-Host "Source deletion process complete." -ForegroundColor Green
+Write-Host "Window will auto-close in 3 seconds..." -ForegroundColor Gray
+Start-Sleep -Seconds 3
+"@
+    
+    # Save script to temp file
+    $scriptPath = Join-Path $TempPath "SourceDeletion_$timestampFile`_$ListItemId.ps1"
+    $deletionScriptContent | Out-File -FilePath $scriptPath -Encoding UTF8
+    
+    Write-Debug-Message "[$timestamp] SOURCE_DELETION: Script saved to: $scriptPath" "Gray"
+    
+    # Launch in new window
+    try {
+        # Build argument string (not array) for Start-Process
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -SourcePath `"$SourcePath`" -ReportFolderPath `"$ReportFolderPath`" -DeletionReportPath `"$deletionReportPath`" -LogPath `"$deletionLogPath`" -SiteUrl `"$SiteUrl`" -ListName `"$ListName`" -ListItemId $ListItemId"
+        
+        # Add app auth parameters if using app authentication (omit AzureEnv - PnP auto-detects from .scloud URL)
+        # Use -UseAppAuth switch (no value needed) for proper command-line binding
+        if ($UseAppAuth) {
+            $arguments += " -UseAppAuth -AppClientId `"$AppClientId`" -AppTenantId `"$AppTenantId`" -AppCertThumbprint `"$AppCertThumbprint`""
+        }
+        
+        Write-Debug-Message "[$timestamp] SOURCE_DELETION: Launching with arguments..." "Gray"
+        
+        $process = Start-Process "powershell.exe" -ArgumentList $arguments -PassThru
+        
+        if ($process -and $process.Id) {
+            Write-Host "[$timestamp] SOURCE_DELETION: Launched (PID: $($process.Id))" -ForegroundColor Green
+            Write-Debug-Message "[$timestamp] SOURCE_DELETION: Deletion report will be saved to: $deletionReportPath" "Gray"
+            Write-Debug-Message "[$timestamp] SOURCE_DELETION: Log file: $deletionLogPath" "Gray"
+            return @{
+                Success = $true
+                ProcessId = $process.Id
+                DeletionReportPath = $deletionReportPath
+                LogPath = $deletionLogPath
+            }
+        } else {
+            throw "Failed to start deletion process"
+        }
+    }
+    catch {
+        $errorMsg = "Failed to launch source deletion process: $($_.Exception.Message)"
+        Write-Host "[$timestamp] SOURCE_DELETION ERROR: $errorMsg" -ForegroundColor Red
+        return @{
+            Success = $false
+            ErrorMessage = $errorMsg
+        }
+    }
+}
+
+# Function to incrementally delete successfully migrated files
+# Parses SPMT ItemReport and deletes only files that were successfully migrated
+# Failed/skipped files remain in source for re-migration attempts
+function Remove-MigratedFilesIncremental {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ReportFolderPath,
+        
+        [Parameter(Mandatory=$true)]
+        $ListItem
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$timestamp] INCREMENTAL_DELETE: Starting incremental deletion for: $SourcePath" -ForegroundColor Cyan
+    
+    # Update status
+    Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Incremental Delete Processing"
+    
+    $deletedCount = 0
+    $failedCount = 0
+    $skippedCount = 0
+    $deletedSizeMB = 0
+    
+    try {
+        # Find all ItemReport files
+        $taskReportFolders = Get-ChildItem -Path $ReportFolderPath -Directory | Where-Object { $_.Name -like "TaskReport_*" }
+        
+        foreach ($taskFolder in $taskReportFolders) {
+            $itemReports = Get-ChildItem -Path $taskFolder.FullName -File -Filter "ItemReport_R1*.csv"
+            
+            foreach ($report in $itemReports) {
+                Write-Host "[$timestamp] INCREMENTAL_DELETE: Processing report: $($report.Name)" -ForegroundColor Gray
+                
+                $reportItems = Import-Csv $report.FullName
+                
+                foreach ($item in $reportItems) {
+                    # Only delete files that were successfully migrated
+                    # Status values: Success, Skipped, Failed
+                    if ($item.Status -eq "Success" -and $item."Item type" -eq "File") {
+                        $sourceFile = $item.Source
+                        
+                        if (Test-Path -LiteralPath $sourceFile) {
+                            try {
+                                $fileSize = (Get-Item -LiteralPath $sourceFile).Length
+                                Remove-Item -LiteralPath $sourceFile -Force -ErrorAction Stop
+                                $deletedCount++
+                                $deletedSizeMB += ($fileSize / 1MB)
+                                
+                                # Log every 50 files
+                                if ($deletedCount % 50 -eq 0) {
+                                    Write-Host "[$timestamp] INCREMENTAL_DELETE: Deleted $deletedCount files so far..." -ForegroundColor Gray
+                                }
+                            }
+                            catch {
+                                $failedCount++
+                                Write-Host "[$timestamp] INCREMENTAL_DELETE: Failed to delete: $sourceFile - $($_.Exception.Message)" -ForegroundColor Yellow
+                            }
+                        }
+                    }
+                    elseif ($item.Status -ne "Success") {
+                        $skippedCount++
+                    }
+                }
+            }
+        }
+        
+        # Clean up empty directories (bottom-up)
+        Write-Host "[$timestamp] INCREMENTAL_DELETE: Cleaning up empty directories..." -ForegroundColor Gray
+        $emptyDirsRemoved = 0
+        
+        if (Test-Path -LiteralPath $SourcePath) {
+            # Get directories sorted by depth (deepest first)
+            $directories = Get-ChildItem -LiteralPath $SourcePath -Directory -Recurse | 
+                Sort-Object { $_.FullName.Split('\').Count } -Descending
+            
+            foreach ($dir in $directories) {
+                if ((Get-ChildItem -LiteralPath $dir.FullName -Force).Count -eq 0) {
+                    try {
+                        Remove-Item -LiteralPath $dir.FullName -Force -ErrorAction Stop
+                        $emptyDirsRemoved++
+                    }
+                    catch {
+                        # Ignore errors removing empty dirs
+                    }
+                }
+            }
+            
+            # Check if root is now empty
+            if ((Get-ChildItem -LiteralPath $SourcePath -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+                Write-Host "[$timestamp] INCREMENTAL_DELETE: Root folder was empty and has been removed" -ForegroundColor Green
+            }
+        }
+        
+        $completedTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $deletedSizeMB = [math]::Round($deletedSizeMB, 2)
+        
+        $statusMsg = "Incremental: $deletedCount files ($deletedSizeMB MB) deleted"
+        if ($skippedCount -gt 0) {
+            $statusMsg += ", $skippedCount items remaining (failed/skipped)"
+        }
+        if ($emptyDirsRemoved -gt 0) {
+            $statusMsg += ", $emptyDirsRemoved empty dirs removed"
+        }
+        
+        Write-Host "[$completedTime] INCREMENTAL_DELETE: $statusMsg" -ForegroundColor Green
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "$statusMsg ($completedTime)"
+        
+        return @{
+            DeletedFiles = $deletedCount
+            DeletedSizeMB = $deletedSizeMB
+            FailedDeletes = $failedCount
+            RemainingItems = $skippedCount
+            EmptyDirsRemoved = $emptyDirsRemoved
+        }
+    }
+    catch {
+        $errorTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $errorMsg = "Incremental delete failed: $($_.Exception.Message)"
+        Write-Host "[$errorTime] INCREMENTAL_DELETE ERROR: $errorMsg" -ForegroundColor Red
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "INCREMENTAL_DELETE"
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteSource" -Value "Incremental Failed $errorTime"
+        return $null
+    }
+}
+
+# Function to remove empty folders after source file deletion
+# SAFETY-CRITICAL: This function is extremely careful to verify folders are 100% empty
+# - Uses Get-ChildItem -Force to detect hidden files
+# - Works bottom-up (deepest folders first) 
+# - Logs every deletion to a report file
+# - Updates SPO list with detailed status
+# - ONLY runs when: $EnableEmptyFolderCleanup = $true AND item's "DeleteEmptyFolders" column = "Yes"
+# WARNING: This is irreversible! There are no backups!
+function Remove-EmptyFoldersAfterMigration {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$true)]
+        $ListItem,
+        
+        [string]$ReportFolderPath = ""
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestampFile = Get-Date -Format "yyyyMMdd_HHmmss"
+    
+    Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Starting empty folder analysis for: $SourcePath" -ForegroundColor Cyan
+    Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: WARNING - This operation is IRREVERSIBLE!" -ForegroundColor Red
+    
+    # Safety check 1: Verify the feature is globally enabled
+    if (-not $EnableEmptyFolderCleanup) {
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Feature is globally disabled (\$EnableEmptyFolderCleanup = \$false)" -ForegroundColor Yellow
+        return @{ Success = $false; Reason = "Feature globally disabled" }
+    }
+    
+    # Safety check 2: Verify the source path still exists
+    if (-not (Test-Path -LiteralPath $SourcePath)) {
+        $msg = "Source path no longer exists: $SourcePath (already fully deleted?)"
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: $msg" -ForegroundColor Yellow
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteEmptyFolders" -Value "N/A - Path Gone"
+        return @{ Success = $true; Reason = $msg; FoldersDeleted = 0 }
+    }
+    
+    # Initialize tracking
+    $foldersAnalyzed = 0
+    $foldersDeleted = 0
+    $foldersFailed = 0
+    $foldersSkipped = 0  # Not empty
+    $deletionLog = @()
+    
+    # Create report file path
+    $reportPath = if ($ReportFolderPath -and (Test-Path $ReportFolderPath)) {
+        Join-Path $ReportFolderPath "EmptyFolderDeletionReport_$timestampFile.csv"
+    } else {
+        Join-Path $TempPath "EmptyFolderDeletionReport_$timestampFile`_$($ListItem.Id).csv"
+    }
+    
+    try {
+        # Update status to show we're processing
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteEmptyFolders" -Value "Analyzing..."
+        
+        # PHASE 1: Analyze all folders (bottom-up order)
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Phase 1 - Analyzing folder structure..." -ForegroundColor Yellow
+        
+        # Get all directories sorted by depth (deepest first for bottom-up deletion)
+        $allDirectories = @()
+        if (Test-Path -LiteralPath $SourcePath -PathType Container) {
+            $allDirectories = Get-ChildItem -LiteralPath $SourcePath -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+                Sort-Object { $_.FullName.Split('\').Count } -Descending
+        }
+        
+        $totalFolders = $allDirectories.Count
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Found $totalFolders subfolders to analyze" -ForegroundColor Gray
+        
+        # PHASE 2: Delete empty folders (bottom-up)
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Phase 2 - Deleting verified empty folders..." -ForegroundColor Yellow
+        
+        foreach ($dir in $allDirectories) {
+            $foldersAnalyzed++
+            $folderPath = $dir.FullName
+            
+            # TRIPLE-CHECK: Is this folder TRULY empty?
+            # Check 1: Get ALL items including hidden and system files
+            $allItems = @(Get-ChildItem -LiteralPath $folderPath -Force -ErrorAction SilentlyContinue)
+            
+            # Check 2: Explicitly count files
+            $fileCount = @($allItems | Where-Object { -not $_.PSIsContainer }).Count
+            
+            # Check 3: Explicitly count subdirectories (should be 0 since we're going bottom-up, but verify)
+            $subDirCount = @($allItems | Where-Object { $_.PSIsContainer }).Count
+            
+            # Check 4: Total item count
+            $totalItems = $allItems.Count
+            
+            $logEntry = [PSCustomObject]@{
+                Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                FolderPath = $folderPath
+                FileCount = $fileCount
+                SubfolderCount = $subDirCount
+                TotalItems = $totalItems
+                Action = ""
+                Result = ""
+                ErrorMessage = ""
+            }
+            
+            if ($totalItems -eq 0 -and $fileCount -eq 0 -and $subDirCount -eq 0) {
+                # VERIFIED EMPTY - Safe to delete
+                try {
+                    # One final check right before deletion
+                    $finalCheck = @(Get-ChildItem -LiteralPath $folderPath -Force -ErrorAction Stop)
+                    
+                    if ($finalCheck.Count -eq 0) {
+                        Remove-Item -LiteralPath $folderPath -Force -ErrorAction Stop
+                        $foldersDeleted++
+                        $logEntry.Action = "DELETE"
+                        $logEntry.Result = "SUCCESS"
+                        
+                        # Log progress every 25 folders
+                        if ($foldersDeleted % 25 -eq 0) {
+                            Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Deleted $foldersDeleted empty folders so far..." -ForegroundColor Gray
+                        }
+                    } else {
+                        # Something appeared between checks! Abort this folder
+                        $foldersSkipped++
+                        $logEntry.Action = "SKIP"
+                        $logEntry.Result = "RACE_CONDITION"
+                        $logEntry.ErrorMessage = "Items appeared during deletion check: $($finalCheck.Count) items found"
+                        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: RACE CONDITION - skipping folder that gained items: $folderPath" -ForegroundColor Yellow
+                    }
+                }
+                catch {
+                    $foldersFailed++
+                    $logEntry.Action = "DELETE"
+                    $logEntry.Result = "FAILED"
+                    $logEntry.ErrorMessage = $_.Exception.Message
+                    Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Failed to delete: $folderPath - $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+            else {
+                # NOT EMPTY - Do not delete
+                $foldersSkipped++
+                $logEntry.Action = "SKIP"
+                $logEntry.Result = "NOT_EMPTY"
+                $logEntry.ErrorMessage = "Contains $fileCount file(s) and $subDirCount subfolder(s)"
+            }
+            
+            $deletionLog += $logEntry
+        }
+        
+        # PHASE 3: Check if root folder is now empty
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Phase 3 - Checking root folder..." -ForegroundColor Yellow
+        
+        $rootLogEntry = [PSCustomObject]@{
+            Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            FolderPath = $SourcePath
+            FileCount = 0
+            SubfolderCount = 0
+            TotalItems = 0
+            Action = ""
+            Result = ""
+            ErrorMessage = ""
+        }
+        
+        if (Test-Path -LiteralPath $SourcePath) {
+            $rootItems = @(Get-ChildItem -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue)
+            $rootLogEntry.TotalItems = $rootItems.Count
+            $rootLogEntry.FileCount = @($rootItems | Where-Object { -not $_.PSIsContainer }).Count
+            $rootLogEntry.SubfolderCount = @($rootItems | Where-Object { $_.PSIsContainer }).Count
+            
+            if ($rootItems.Count -eq 0) {
+                # Root folder is also empty - delete it
+                try {
+                    # Final verification
+                    $finalRootCheck = @(Get-ChildItem -LiteralPath $SourcePath -Force -ErrorAction Stop)
+                    
+                    if ($finalRootCheck.Count -eq 0) {
+                        Remove-Item -LiteralPath $SourcePath -Force -ErrorAction Stop
+                        $foldersDeleted++
+                        $rootLogEntry.Action = "DELETE"
+                        $rootLogEntry.Result = "SUCCESS"
+                        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: ROOT FOLDER DELETED - $SourcePath" -ForegroundColor Green
+                    } else {
+                        $rootLogEntry.Action = "SKIP"
+                        $rootLogEntry.Result = "RACE_CONDITION"
+                        $rootLogEntry.ErrorMessage = "Items appeared during deletion check"
+                    }
+                }
+                catch {
+                    $foldersFailed++
+                    $rootLogEntry.Action = "DELETE"
+                    $rootLogEntry.Result = "FAILED"
+                    $rootLogEntry.ErrorMessage = $_.Exception.Message
+                }
+            }
+            else {
+                $foldersSkipped++
+                $rootLogEntry.Action = "SKIP"
+                $rootLogEntry.Result = "NOT_EMPTY"
+                $rootLogEntry.ErrorMessage = "Root contains $($rootLogEntry.FileCount) file(s) and $($rootLogEntry.SubfolderCount) subfolder(s)"
+                Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Root folder still has content - not deleted" -ForegroundColor Yellow
+            }
+            
+            $deletionLog += $rootLogEntry
+        }
+        
+        # PHASE 4: Write deletion report
+        Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Phase 4 - Writing deletion report..." -ForegroundColor Yellow
+        
+        if ($deletionLog.Count -gt 0) {
+            $deletionLog | Export-Csv -Path $reportPath -NoTypeInformation -Encoding UTF8 -Force
+            Write-Host "[$timestamp] EMPTY_FOLDER_CLEANUP: Report saved to: $reportPath" -ForegroundColor Gray
+        }
+        
+        # PHASE 5: Update SharePoint list with summary
+        $completedTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $statusMsg = "Deleted: $foldersDeleted"
+        if ($foldersSkipped -gt 0) {
+            $statusMsg += ", NotEmpty: $foldersSkipped"
+        }
+        if ($foldersFailed -gt 0) {
+            $statusMsg += ", Failed: $foldersFailed"
+        }
+        $statusMsg += " ($completedTime)"
+        
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteEmptyFolders" -Value $statusMsg
+        
+        Write-Host "" -ForegroundColor White
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP: ====== SUMMARY ======" -ForegroundColor Cyan
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP:   Folders analyzed: $foldersAnalyzed" -ForegroundColor White
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP:   Folders deleted:  $foldersDeleted" -ForegroundColor Green
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP:   Folders skipped:  $foldersSkipped (not empty)" -ForegroundColor Yellow
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP:   Folders failed:   $foldersFailed" -ForegroundColor $(if ($foldersFailed -gt 0) { "Red" } else { "White" })
+        Write-Host "[$completedTime] EMPTY_FOLDER_CLEANUP: =====================" -ForegroundColor Cyan
+        
+        return @{
+            Success = $true
+            FoldersAnalyzed = $foldersAnalyzed
+            FoldersDeleted = $foldersDeleted
+            FoldersSkipped = $foldersSkipped
+            FoldersFailed = $foldersFailed
+            ReportPath = $reportPath
+        }
+    }
+    catch {
+        $errorTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $errorMsg = "Empty folder cleanup failed: $($_.Exception.Message)"
+        Write-Host "[$errorTime] EMPTY_FOLDER_CLEANUP ERROR: $errorMsg" -ForegroundColor Red
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "EMPTY_FOLDER_CLEANUP"
+        Update-ListItemField -ListItem $ListItem -FieldName "DeleteEmptyFolders" -Value "Failed $errorTime"
+        
+        return @{
+            Success = $false
+            ErrorMessage = $errorMsg
+            FoldersDeleted = $foldersDeleted
+        }
+    }
+}
+
+#endregion
+
+# Purpose: Creates FailureSummaryReport2.csv with actual errors from ItemReport_R1.csv
+# This is the same format as the H:drive OneDrive migration script
+function New-FailureSummaryReport {
+    param (
+        [Parameter(Mandatory=$false)]
+        [array]$MigrationErrors = @(),
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ReportFolderPath
+    )
+    
+    # Handle null or empty report folder path
+    if ([string]::IsNullOrWhiteSpace($ReportFolderPath)) {
+        Write-Host "Warning: ReportFolderPath is null/empty, cannot create FailureSummaryReport" -ForegroundColor Yellow
+        return $null
+    }
+    
+    # Only create report if there are errors
+    if ($MigrationErrors.Count -eq 0) {
+        Write-Host "No errors to report - skipping FailureSummaryReport2.csv creation" -ForegroundColor Green
+        return $null
+    }
+    
+    $reportPath = Join-Path $ReportFolderPath "FailureSummaryReport2.csv"
+    Write-Host "Creating FailureSummaryReport2.csv with $($MigrationErrors.Count) errors at: $reportPath" -ForegroundColor Cyan
+    
+    try {
+        # Export errors in same format as ItemReport (Status, Item name, Source, Message, Result category)
+        $MigrationErrors | Export-Csv -Path $reportPath -NoTypeInformation -Force
+        Write-Host "Created FailureSummaryReport2.csv: $reportPath" -ForegroundColor Green
+        return $reportPath
+    }
+    catch {
+        Write-Host "Failed to create FailureSummaryReport2.csv: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Legacy function for backwards compatibility - calls new function
+function New-MigrationSummaryReport {
+    param (
+        [Parameter(Mandatory=$false)]
+        [array]$MigrationErrors = @(),
+        
+        [Parameter(Mandatory=$true)]
+        [string]$SourcePath,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$ReportFolderPath,
+        
+        [int]$TotalItemsProcessed = 0,
+        
+        [int]$SuccessfulItems = 0
+    )
+    
+    # Just call the new function
+    return New-FailureSummaryReport -MigrationErrors $MigrationErrors -ReportFolderPath $ReportFolderPath
+}
+
+# Purpose: Format the LOG field value with report folder and transcript path
+function Format-LogFieldValue {
+    param (
+        [string]$ReportFolderPath,
+        [string]$TranscriptPath
+    )
+    
+    $logValue = ""
+    if (-not [string]::IsNullOrWhiteSpace($ReportFolderPath)) {
+        $logValue = "Migration Log: $ReportFolderPath"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TranscriptPath)) {
+        if ($logValue) {
+            $logValue += " ; Transcript: $TranscriptPath"
+        } else {
+            $logValue = "Transcript: $TranscriptPath"
+        }
+    }
+    return $logValue
+}
+
+# Purpose: Manages migration report attachments in SharePoint lists with throttling awareness
+# Handles the cleanup of old reports and attachment of new ones
+# Only attaches FailureSummaryReport2.csv if there are errors
+function Add-MigrationReportAttachment {
+    param (
+        [Parameter(Mandatory=$true)]
+        $ListItem,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$ReportPath,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$ReportFolderPath = "",
+        
+        [string]$TranscriptPath = "",
+        
+        [int]$MaxRetries = 3
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Debug-Message "[$timestamp] ATTACHMENT: Starting attachment process for item $($ListItem.Id)" "Cyan"
+    
+    # Update LOG field first (even if no attachment)
+    $logValue = Format-LogFieldValue -ReportFolderPath $ReportFolderPath -TranscriptPath $TranscriptPath
+    if ($logValue) {
+        Update-ListItemField -ListItem $ListItem -FieldName "LOG" -Value $logValue
+    }
+    
+    # If no report path provided or file doesn't exist, we're done (just updated LOG)
+    if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+        Write-Host "[$timestamp] ATTACHMENT: No error report to attach (no errors found)" -ForegroundColor Green
+        return $true
+    }
+    
+    try {
+        # Verify file exists
+        if (-not (Test-Path $ReportPath)) {
+            $errorMsg = "Report file not found at $ReportPath - cannot attach"
+            Write-Host "[$timestamp] ATTACHMENT ERROR: $errorMsg" -ForegroundColor Red
+            Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "ATTACHMENT"
+            return $false
+        }
+        
+        $reportFileName = Split-Path $ReportPath -Leaf
+        Write-Debug-Message "[$timestamp] ATTACHMENT: Attaching file: $reportFileName" "Gray"
+        
+        # Try to remove previous attachments with similar name pattern
+        try {
+            Write-Debug-Message "[$timestamp] ATTACHMENT: Checking for previous attachments..." "Gray"
+            $item = Get-PnPListItem -List $listName -Id $ListItem.Id -ErrorAction SilentlyContinue
+            if ($item) {
+                $attachmentFiles = Get-PnPProperty -ClientObject $item -Property "AttachmentFiles" -ErrorAction SilentlyContinue
+                
+                foreach ($attachment in $attachmentFiles) {
+                    # Remove any previous migration reports (FailureSummaryReport2 and legacy patterns)
+                    if ($attachment.FileName -like "FailureSummaryReport*.csv" -or 
+                        $attachment.FileName -like "MigrationReport_*.csv" -or 
+                        $attachment.FileName -like "MigrationSummary_*.csv") {
+                        Write-Debug-Message "[$timestamp] ATTACHMENT: Removing old attachment: $($attachment.FileName)" "Yellow"
+                        Remove-PnPListItemAttachment -List $listName -Identity $ListItem.Id -FileName $attachment.FileName -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        } catch {
+            Write-Host "[$timestamp] ATTACHMENT: Note - could not check/remove previous attachments: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+        # Add delay between operations
+        Start-Sleep -Seconds 3
+        
+        # Try to add the new attachment with retry logic
+        $attachmentAdded = $false
+        $retryCount = 0
+        
+        while (-not $attachmentAdded -and $retryCount -lt $MaxRetries) {
+            $retryCount++
+            try {
+                Write-Debug-Message "[$timestamp] ATTACHMENT: Attempting to add attachment (try $retryCount of $MaxRetries)..." "Yellow"
+                Add-PnPListItemAttachment -List $listName -Id $ListItem.Id -Path $ReportPath -ErrorAction Stop
+                $attachmentAdded = $true
+                Write-Debug-Message "[$timestamp] ATTACHMENT: Successfully attached migration report" "Green"
+            }
+            catch {
+                if ($_.Exception.Message -like "*throttled*" -or 
+                    $_.Exception.Message -like "*429*" -or
+                    $_.Exception.Message -like "*503*") {
+                    
+                    $waitTime = 30 * $retryCount
+                    Write-Host "[$timestamp] ATTACHMENT: Throttling detected. Waiting $waitTime seconds..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $waitTime
+                }
+                else {
+                    Write-Host "[$timestamp] ATTACHMENT ERROR: $($_.Exception.Message)" -ForegroundColor Red
+                    
+                    if ($retryCount -ge $MaxRetries) {
+                        Write-Host "[$timestamp] ATTACHMENT: Maximum attempts reached. Moving on." -ForegroundColor Red
+                        Update-ListItemError -ListItem $ListItem -ErrorMessage "Failed to attach report after $MaxRetries attempts: $($_.Exception.Message)" -ErrorCategory "ATTACHMENT"
+                        break
+                    }
+                    
+                    Start-Sleep -Seconds 10
+                }
+            }
+        }
+        
+        # LOG field already updated at beginning of function
+        return $attachmentAdded
+    }
+    catch {
+        $errorMsg = "Attachment process failed: $($_.Exception.Message)"
+        Write-Host "[$timestamp] ATTACHMENT ERROR: $errorMsg" -ForegroundColor Red
+        Update-ListItemError -ListItem $ListItem -ErrorMessage $errorMsg -ErrorCategory "ATTACHMENT"
+        return $false
+    }
+}
+
+#endregion
+
+#region ===== CSV FILE HANDLING =====
+
+# Function to load migrations from CSV file
+function Get-CSVMigrationItems {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$CSVPath
+    )
+    
+    Write-Host "Loading migration items from CSV: $CSVPath" -ForegroundColor Cyan
+    
+    if (-not (Test-Path $CSVPath)) {
+        Write-Host "CSV file not found: $CSVPath" -ForegroundColor Red
+        return $null
+    }
+    
+    try {
+        $csvItems = Import-Csv $CSVPath
+        
+        Write-Host "CSV columns found: $($csvItems[0].PSObject.Properties.Name -join ', ')" -ForegroundColor Gray
+        
+        # Validate required columns exist
+        $requiredColumns = @("SourcePath", "TargetUrl", "TargetList")
+        $missingColumns = @()
+        
+        if ($csvItems.Count -gt 0) {
+            $csvColumns = $csvItems[0].PSObject.Properties.Name
+            foreach ($col in $requiredColumns) {
+                if ($col -notin $csvColumns) {
+                    $missingColumns += $col
+                }
+            }
+        }
+        
+        if ($missingColumns.Count -gt 0) {
+            Write-Host "CSV file is missing required columns: $($missingColumns -join ', ')" -ForegroundColor Red
+            Write-Host "Found columns: $($csvItems[0].PSObject.Properties.Name -join ', ')" -ForegroundColor Yellow
+            return $null
+        }
+        
+        # Validate each item
+        $validItems = @()
+        $invalidCount = 0
+        
+        foreach ($item in $csvItems) {
+            $isValid = $true
+            
+            # Validate target URL
+            if (-not (Test-TargetUrl -TargetUrl $item.TargetUrl)) {
+                $isValid = $false
+                $invalidCount++
+                Write-Host "Invalid target URL in CSV: $($item.TargetUrl)" -ForegroundColor Red
+            }
+            
+            # Validate source path exists
+            if (-not (Test-SourcePath -SourcePath $item.SourcePath)) {
+                $isValid = $false
+                $invalidCount++
+            }
+            
+            if ($isValid) {
+                $validItems += $item
+            }
+        }
+        
+        Write-Host "Loaded $($validItems.Count) valid items from CSV ($invalidCount invalid)" -ForegroundColor Green
+        return $validItems
+    }
+    catch {
+        Write-Host "Error loading CSV: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Function to display CSV file selection menu
+# Stage mode: Only shows files starting with "Stage_" prefix
+# Migrate mode: Shows all CSV files
+function Show-CSVFileMenu {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$MigrationType
+    )
+    
+    Write-Host "`nAvailable CSV files in $MigrationCSVLists`:" -ForegroundColor Cyan
+    
+    if (-not (Test-Path $MigrationCSVLists)) {
+        Write-Host "CSV folder not found. Creating: $MigrationCSVLists" -ForegroundColor Yellow
+        New-Item -Path $MigrationCSVLists -ItemType Directory -Force | Out-Null
+    }
+    
+    # Get all CSV files first
+    $allCsvFiles = Get-ChildItem -Path $MigrationCSVLists -Filter "*.csv" | Sort-Object LastWriteTime -Descending
+    
+    # Filter based on migration type
+    if ($MigrationType -eq "Stage") {
+        # Stage mode: Only show files starting with "Stage_" (not "Staged_")
+        $csvFiles = $allCsvFiles | Where-Object { $_.Name -like "Stage_*" -and $_.Name -notlike "Staged_*" }
+        $fileTypeDesc = "Stage_*.csv"
+        Write-Host "Stage mode: Looking for files starting with 'Stage_'" -ForegroundColor Yellow
+    }
+    elseif ($MigrationType -eq "Migrate") {
+        # Migrate mode: Only show files starting with "Staged_" (not "Migrated_")
+        $csvFiles = $allCsvFiles | Where-Object { $_.Name -like "Staged_*" -and $_.Name -notlike "Migrated_*" }
+        $fileTypeDesc = "Staged_*.csv"
+        Write-Host "Migrate mode: Looking for files starting with 'Staged_'" -ForegroundColor Yellow
+    }
+    else {
+        # Fallback: Show all CSV files
+        $csvFiles = $allCsvFiles
+        $fileTypeDesc = "*.csv"
+    }
+    
+    if ($csvFiles.Count -eq 0) {
+        if ($MigrationType -eq "Stage") {
+            Write-Host "No Stage_*.csv files found in $MigrationCSVLists" -ForegroundColor Yellow
+            Write-Host "`nTo use Stage mode, create a CSV file with 'Stage_' prefix (e.g., Stage_BatchA.csv)" -ForegroundColor Yellow
+        } elseif ($MigrationType -eq "Migrate") {
+            Write-Host "No Staged_*.csv files found in $MigrationCSVLists" -ForegroundColor Yellow
+            Write-Host "`nTo use Migrate mode, first run Stage which creates 'Staged_' files" -ForegroundColor Yellow
+        } else {
+            Write-Host "No CSV files found in $MigrationCSVLists" -ForegroundColor Yellow
+        }
+        Write-Host "`nCSV file should have these columns: SourcePath, TargetUrl, TargetList, TargetRelativePath (optional)" -ForegroundColor Yellow
+        return $null
+    }
+    
+    Write-Host "Showing $($csvFiles.Count) file(s) matching: $fileTypeDesc" -ForegroundColor Gray
+    Write-Host ""
+    
+    $index = 1
+    foreach ($file in $csvFiles) {
+        Write-Host "$index`: $($file.Name) (Modified: $($file.LastWriteTime.ToString('MM/dd/yyyy HH:mm')))" -ForegroundColor Green
+        $index++
+    }
+    
+    Write-Host ""
+    do {
+        $selection = Read-Host "Select a CSV file (1-$($csvFiles.Count)) or 'Q' to quit"
+        if ($selection -eq 'Q' -or $selection -eq 'q') {
+            return $null
+        }
+        
+        $selectionNum = 0
+        if ([int]::TryParse($selection, [ref]$selectionNum) -and $selectionNum -ge 1 -and $selectionNum -le $csvFiles.Count) {
+            return $csvFiles[$selectionNum - 1].FullName
+        }
+        
+        Write-Host "Invalid selection. Please try again." -ForegroundColor Red
+    } while ($true)
+}
+
+#endregion
+
+#region ===== MAIN MIGRATION PROCESS =====
+
+# Main function to process migration from SharePoint list
+function Start-SPOListMigration {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$MigrationType
+    )
+    
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "Starting $MigrationType from SharePoint List" -ForegroundColor Cyan
+    if ($DateCutoff) {
+        Write-Host "Date Filter: Content modified after $DateCutoff" -ForegroundColor Cyan
+    } else {
+        Write-Host "Date Filter: DISABLED - migrating ALL files" -ForegroundColor Cyan
+    }
+    Write-Host "========================================`n" -ForegroundColor Cyan
+    
+    # Create transcript log for this batch (separate folder from SPMT logs)
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $transcriptFolder = "F:\SPMTTranscripts"
+    if (-not (Test-Path $transcriptFolder)) { New-Item -Path $transcriptFolder -ItemType Directory -Force | Out-Null }
+    $transcriptPath = Join-Path $transcriptFolder "SPMTTranscript_Migration_$timestamp.log"
+    Start-Transcript -Path $transcriptPath -Append
+    
+    # Get items from SharePoint list
+    $items = Get-SPOListItems -MigrationType $MigrationType
+    
+    # Ensure we have items
+    if ($null -eq $items) {
+        Write-Host "No items found for $MigrationType" -ForegroundColor Yellow
+        return
+    }
+    
+    # Items is already an array from Get-SPOListItems, use directly
+    # Filter out any null/empty entries that might have snuck in
+    $itemsArray = $items | Where-Object { $_ -ne $null -and $_["SourcePath"] }
+    
+    $itemCount = @($itemsArray).Count
+    if ($itemCount -eq 0) {
+        Write-Host "No valid items found for $MigrationType" -ForegroundColor Yellow
+        return
+    }
+    
+    Write-Host "Processing $itemCount item(s)..." -ForegroundColor Cyan
+    
+    foreach ($item in $itemsArray) {
+        # Trim whitespace from field values
+        $sourcePath = if ($item["SourcePath"]) { $item["SourcePath"].ToString().Trim() } else { "" }
+        
+        # Check multiple possible field names for TargetUrl (case variations)
+        $targetUrl = ""
+        foreach ($urlFieldName in @("TargetUrl", "TargetURL", "targeturl", "Targeturl")) {
+            if ($item[$urlFieldName]) {
+                $targetUrl = $item[$urlFieldName].ToString().Trim()
+                break
+            }
+        }
+        
+        $targetList = if ($item["TargetList"]) { $item["TargetList"].ToString().Trim() } else { "Shared Documents" }
+        $targetRelPath = if ($item["TargetRelativePath1"]) { $item["TargetRelativePath1"].ToString().Trim() } else { "" }
+        $itemTitle = if ($item["Title"]) { $item["Title"].ToString().Trim() } else { $sourcePath }
+        
+        Write-Host "`n----------------------------------------" -ForegroundColor Cyan
+        Write-Host "Processing: $itemTitle" -ForegroundColor Cyan
+        Write-Host "Source: $sourcePath" -ForegroundColor Gray
+        Write-Host "Target: $targetUrl/$targetList" -ForegroundColor Gray
+        Write-Host "----------------------------------------" -ForegroundColor Cyan
+        
+        # Note: Item was already marked as Processing in Get-SPOListItems
+        
+        # Validate required fields
+        if ([string]::IsNullOrWhiteSpace($sourcePath)) {
+            Write-Host "ERROR: SourcePath is empty for this item. Skipping." -ForegroundColor Red
+            Update-ListItemField -ListItem $item -FieldName "Processing" -Value ""
+            Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "ValidationFailed"
+            Update-ListItemError -ListItem $item -ErrorMessage "SourcePath is empty" -ErrorCategory "VALIDATION"
+            continue
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($targetUrl)) {
+            Write-Host "ERROR: TargetUrl is empty for this item. Skipping." -ForegroundColor Red
+            Update-ListItemField -ListItem $item -FieldName "Processing" -Value ""
+            Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "ValidationFailed"
+            Update-ListItemError -ListItem $item -ErrorMessage "TargetUrl is empty" -ErrorCategory "VALIDATION"
+            continue
+        }
+        
+        # Validate target URL format
+        if (-not (Test-TargetUrl -TargetUrl $targetUrl)) {
+            Write-Host "ERROR: Invalid target URL format for this item. Skipping." -ForegroundColor Red
+            Update-ListItemField -ListItem $item -FieldName "Processing" -Value ""
+            Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "ValidationFailed"
+            Update-ListItemError -ListItem $item -ErrorMessage "Invalid target URL: $targetUrl" -ErrorCategory "VALIDATION"
+            continue
+        }
+        
+        # Validate storage info is populated (Phase 2 of Update-MigrationTargets must complete first)
+        # LastChecked is only stamped after storage info is retrieved - ensures proper 7/5/3 year bucket calculation
+        $lastChecked = $item["LastChecked"]
+        if (-not $lastChecked) {
+            Write-Host "ERROR: Storage info not populated. Run Update-MigrationTargets.v2.ps1 first." -ForegroundColor Red
+            Update-ListItemField -ListItem $item -FieldName "Processing" -Value ""
+            Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "ValidationFailed"
+            Update-ListItemError -ListItem $item -ErrorMessage "Storage info missing - run Update-MigrationTargets first" -ErrorCategory "VALIDATION"
+            continue
+        }
+        
+        # Execute migration
+        $result = Start-CommonDriveMigration -SourcePath $sourcePath -TargetUrl $targetUrl -TargetList $targetList -TargetRelativePath $targetRelPath -ListItem $item -TranscriptPath $transcriptPath
+        
+        # Update completion date (use Eastern time for consistency across servers)
+        $completedTime = Get-Date
+        Update-ListItemField -ListItem $item -FieldName "CompletedDate" -Value $completedTime.ToString('MM/dd/yyyy HH:mm:ss')
+        
+        # Calculate duration
+        $startDate = $item["StartDate"]
+        if ($startDate) {
+            try {
+                $duration = $completedTime - [DateTime]$startDate
+                Update-ListItemField -ListItem $item -FieldName "EstDuration" -Value $duration.ToString("hh\:mm\:ss")
+            } catch { }
+        }
+        
+        # DEBUG: Show what result contains
+        Write-Debug-Message "DEBUG: result = $($result | ConvertTo-Json -Compress -Depth 1)" "Magenta"
+        Write-Debug-Message "DEBUG: result.Success = $($result.Success)" "Magenta"
+        Write-Debug-Message "DEBUG: result.FatalError = $($result.FatalError)" "Magenta"
+        $errorCount = @($result.Errors).Count
+        Write-Debug-Message "DEBUG: result.Errors count = $errorCount" "Magenta"
+        Write-Debug-Message "DEBUG: result.ReportFolderPath = $($result.ReportFolderPath)" "Magenta"
+        
+        # Update status and perform post-migration actions based on result
+        # Use @() to ensure Errors is always treated as array, then filter out $null entries
+        $allErrors = @($result.Errors) | Where-Object { $_ -ne $null }
+        $errorCount = @($allErrors).Count
+        
+        # Calculate "real" errors - exclude filtered items (blocked extensions are expected, not failures)
+        $realErrors = @($allErrors | Where-Object { 
+            $_ -ne $null -and
+            $_.Message -and
+            $_.Message -notlike "*Filtered out by Customer Settings*" -and 
+            $_.Message -notlike "*filtered out by extension*"
+        })
+        $realErrorCount = @($realErrors).Count
+        Write-Debug-Message "DEBUG: Real errors (excluding filtered): $realErrorCount" "Magenta"
+        
+        if ($result.FatalError -eq $true) {
+            # Fatal error - do NOT perform post-migration actions
+            Write-Host "FATAL ERROR - Skipping post-migration actions" -ForegroundColor Red
+            
+            if ($MigrationType -eq "Stage") {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "StageFailed"
+            } else {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "Failed"
+            }
+            
+            # Record error summary (not individual errors - could be 50k+)
+            $realErrors = @($result.Errors) | Where-Object { 
+                $_ -ne $null -and $_.Message -and
+                $_.Message -notlike "*Filtered out by Customer Settings*" -and 
+                $_.Message -notlike "*filtered out by extension*" 
+            }
+            if ($realErrors.Count -gt 0) {
+                $errorSummary = Get-ErrorSummary -MigrationErrors $realErrors
+                if ($errorSummary) {
+                    Update-ListItemField -ListItem $item -FieldName "ScriptError" -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][MIGRATION] $errorSummary"
+                }
+            }
+        }
+        elseif ($result.Success -eq $true -and $realErrorCount -eq 0) {
+            # Complete success - perform post-migration actions
+            # Note: Filtered items (blocked extensions) don't count as errors
+            Write-Host "SUCCESS - Performing post-migration actions" -ForegroundColor Green
+            if ($errorCount -gt 0) {
+                Write-Host "  ($errorCount items filtered by extension - expected behavior)" -ForegroundColor Gray
+            }
+            
+            if ($MigrationType -eq "Stage") {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "Staged"
+            } else {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "Migrated"
+                
+                # Launch Reacl automatically on successful migration (background process)
+                # Sets non-admin accounts to read-only on the source folder
+                Write-Host "Launching REACL - setting source folder to read-only..." -ForegroundColor Cyan
+                Set-SourceReadOnly -SourcePath $sourcePath -ListItem $item
+                
+                # DeleteSource - Launch source deletion in NEW WINDOW
+                # This opens a new PowerShell window, reads ItemReport, deletes migrated files,
+                # creates DeletionReport.csv, and attaches it to the SPO list item
+                Write-Host "`n========================================" -ForegroundColor Yellow
+                Write-Host "LAUNCHING SOURCE DELETION IN NEW WINDOW" -ForegroundColor Yellow
+                Write-Host "========================================" -ForegroundColor Yellow
+                Write-Host "This will delete files from source that have Status='Migrated'" -ForegroundColor Cyan
+                Write-Host "A deletion report will be created and attached to the list item" -ForegroundColor Cyan
+                
+                $deletionResult = Start-SourceDeletionInNewWindow -SourcePath $sourcePath -ReportFolderPath $result.ReportFolderPath -SiteUrl $siteUrl -ListName $listName -ListItemId $item.Id -UseAppAuth $UseAppAuth -AppClientId $AppClientId -AppTenantId $AppTenantId -AppCertThumbprint $AppCertificateThumbprint
+                
+                if ($deletionResult.Success) {
+                    Write-Host "Source deletion process launched (PID: $($deletionResult.ProcessId))" -ForegroundColor Green
+                    Write-Host "Deletion report will be saved to: $($deletionResult.DeletionReportPath)" -ForegroundColor Gray
+                } else {
+                    Write-Host "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ForegroundColor Red
+                    Update-ListItemError -ListItem $item -ErrorMessage "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ErrorCategory "SOURCE_DELETION"
+                }
+            }
+        }
+        elseif ($result.Success -eq $true -and $realErrorCount -gt 0) {
+            # Partial success with real errors - Delete only successfully migrated files
+            Write-Host "PARTIAL SUCCESS with $realErrorCount real errors ($errorCount total including filtered)" -ForegroundColor Yellow
+            
+            if ($MigrationType -eq "Stage") {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "StagedWithErrors"
+            } else {
+                Update-ListItemField -ListItem $item -FieldName "Migrate" -Value "MigratedWithErrors"
+                
+                # Launch source deletion in NEW WINDOW - deletes ONLY successfully migrated files
+                # Failed/skipped files will remain in source for re-migration attempt
+                Write-Host "`n========================================" -ForegroundColor Yellow
+                Write-Host "LAUNCHING SOURCE DELETION IN NEW WINDOW" -ForegroundColor Yellow
+                Write-Host "========================================" -ForegroundColor Yellow
+                Write-Host "This will delete ONLY files with Status='Migrated'" -ForegroundColor Cyan
+                Write-Host "Failed/skipped files will remain for re-migration" -ForegroundColor Yellow
+                Write-Host "A deletion report will be created and attached to the list item" -ForegroundColor Cyan
+                
+                $deletionResult = Start-SourceDeletionInNewWindow -SourcePath $sourcePath -ReportFolderPath $result.ReportFolderPath -SiteUrl $siteUrl -ListName $listName -ListItemId $item.Id -UseAppAuth $UseAppAuth -AppClientId $AppClientId -AppTenantId $AppTenantId -AppCertThumbprint $AppCertificateThumbprint
+                
+                if ($deletionResult.Success) {
+                    Write-Host "Source deletion process launched (PID: $($deletionResult.ProcessId))" -ForegroundColor Green
+                    Write-Host "Deletion report will be saved to: $($deletionResult.DeletionReportPath)" -ForegroundColor Gray
+                } else {
+                    Write-Host "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ForegroundColor Red
+                    Update-ListItemError -ListItem $item -ErrorMessage "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ErrorCategory "SOURCE_DELETION"
+                }
+                
+                # REACL DISABLED - message removed
+                # Do NOT perform Reacl on partial success (some files may need to be re-migrated)
+                # Write-Host "Skipping Reacl due to errors - source must remain writable for re-migration" -ForegroundColor Yellow
+            }
+            
+            # Record error summary (not individual errors - could be 50k+)
+            $realErrors = @($result.Errors) | Where-Object { 
+                $_ -ne $null -and $_.Message -and
+                $_.Message -notlike "*Filtered out by Customer Settings*" -and 
+                $_.Message -notlike "*filtered out by extension*" 
+            }
+            if ($realErrors.Count -gt 0) {
+                $errorSummary = Get-ErrorSummary -MigrationErrors $realErrors
+                if ($errorSummary) {
+                    Update-ListItemField -ListItem $item -FieldName "ScriptError" -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][MIGRATION] $errorSummary"
+                }
+            }
+        }
+        else {
+            # No condition matched - this shouldn't happen but log it for debugging
+            Write-Host "WARNING: No post-migration condition matched!" -ForegroundColor Red
+            Write-Host "  result.Success = $($result.Success)" -ForegroundColor Red
+            Write-Host "  result.FatalError = $($result.FatalError)" -ForegroundColor Red
+            Write-Host "  errorCount = $errorCount" -ForegroundColor Red
+        }
+        
+        # Clear processing flag
+        Update-ListItemField -ListItem $item -FieldName "Processing" -Value ""
+        
+        Write-Host "Completed processing: $itemTitle" -ForegroundColor Cyan
+    }
+    
+    Stop-Transcript
+    
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "$MigrationType Complete" -ForegroundColor Cyan
+    Write-Host "Log: $transcriptPath" -ForegroundColor Cyan
+    Write-Host "========================================`n" -ForegroundColor Cyan
+}
+
+# Main function to process migration from CSV file
+function Start-CSVMigration {
+    # TODO: This function does NOT have the storage capacity check (Get-OptimalYearCutoff) that Start-SPOListMigration has.
+    #       If CSV migration is used in production, add storage check logic similar to Start-CommonDriveMigration.
+    #       The storage check prevents migrations that exceed target site capacity.
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$MigrationType,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$CSVPath
+    )
+    
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "Starting $MigrationType from CSV File" -ForegroundColor Cyan
+    if ($DateCutoff) {
+        Write-Host "Date Filter: Content modified after $DateCutoff" -ForegroundColor Cyan
+    } else {
+        Write-Host "Date Filter: DISABLED - migrating ALL files" -ForegroundColor Cyan
+    }
+    Write-Host "CSV File: $CSVPath" -ForegroundColor Cyan
+    Write-Host "========================================`n" -ForegroundColor Cyan
+    
+    # Rename CSV file IMMEDIATELY after selection to prevent duplicate runs
+    $csvFileName = Split-Path $CSVPath -Leaf
+    $renameTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $newCSVPath = $CSVPath  # Default to original path
+    
+    if ($MigrationType -eq "Stage") {
+        # Stage: Stage_*.csv -> Staged_*.csv
+        if ($csvFileName -like "Stage_*" -and $csvFileName -notlike "Staged_*") {
+            $baseName = $csvFileName -replace "^Stage_", ""
+            $baseName = $baseName -replace "\.csv$", ""
+            $newFileName = "Staged_${baseName}_$renameTimestamp.csv"
+            $newCSVPath = Join-Path (Split-Path $CSVPath -Parent) $newFileName
+            
+            try {
+                Rename-Item -Path $CSVPath -NewName $newFileName -Force
+                Write-Host "CSV file renamed to prevent duplicate selection:" -ForegroundColor Cyan
+                Write-Host "  From: $csvFileName" -ForegroundColor Gray
+                Write-Host "  To:   $newFileName" -ForegroundColor Green
+                Write-Host ""
+            }
+            catch {
+                Write-Host "Warning: Could not rename CSV file: $($_.Exception.Message)" -ForegroundColor Yellow
+                $newCSVPath = $CSVPath
+            }
+        }
+    }
+    elseif ($MigrationType -eq "Migrate") {
+        # Migrate: Staged_*.csv -> Migrated_*.csv
+        if ($csvFileName -like "Staged_*" -and $csvFileName -notlike "Migrated_*") {
+            $baseName = $csvFileName -replace "^Staged_", ""
+            $baseName = $baseName -replace "\.csv$", ""
+            $newFileName = "Migrated_${baseName}_$renameTimestamp.csv"
+            $newCSVPath = Join-Path (Split-Path $CSVPath -Parent) $newFileName
+            
+            try {
+                Rename-Item -Path $CSVPath -NewName $newFileName -Force
+                Write-Host "CSV file renamed to prevent duplicate selection:" -ForegroundColor Cyan
+                Write-Host "  From: $csvFileName" -ForegroundColor Gray
+                Write-Host "  To:   $newFileName" -ForegroundColor Green
+                Write-Host ""
+            }
+            catch {
+                Write-Host "Warning: Could not rename CSV file: $($_.Exception.Message)" -ForegroundColor Yellow
+                $newCSVPath = $CSVPath
+            }
+        }
+    }
+    
+    # Load CSV items (use new path if renamed)
+    $csvItems = Get-CSVMigrationItems -CSVPath $newCSVPath
+    
+    if ($null -eq $csvItems -or $csvItems.Count -eq 0) {
+        Write-Host "No valid items found in CSV" -ForegroundColor Yellow
+        return
+    }
+    
+    Write-Host "Validating $($csvItems.Count) items from CSV against SPO list..." -ForegroundColor Cyan
+    
+    # PHASE 1: Validate ALL items against SPO list and filter based on Migrate column
+    # This ensures we only process items that should be processed for this migration type
+    $itemsToProcess = @()
+    $skippedItems = @()
+    
+    Ensure-PnPConnection -ForceReconnect | Out-Null
+    $spoListItems = Get-PnPListItem -List $listName -PageSize 500 -ErrorAction SilentlyContinue
+    
+    foreach ($csvItem in $csvItems) {
+        $sourcePath = $csvItem.SourcePath
+        
+        # Find matching SPO list item
+        $matchingItem = $spoListItems | Where-Object { 
+            $spSource = if ($_["SourcePath"]) { $_["SourcePath"].ToString().Trim() } else { "" }
+            $spSource -eq $sourcePath.Trim()
+        } | Select-Object -First 1
+        
+        if (-not $matchingItem) {
+            Write-Host "  No SPO list item found for: $sourcePath - will process anyway" -ForegroundColor Gray
+            $itemsToProcess += @{ CSVItem = $csvItem; SPOItem = $null }
+            continue
+        }
+        
+        $currentMigrate = if ($matchingItem["Migrate"]) { $matchingItem["Migrate"].ToString().Trim() } else { "" }
+        $currentProcessing = if ($matchingItem["Processing"]) { $matchingItem["Processing"].ToString().Trim() } else { "" }
+        
+        # Check if already being processed (prefix match for atomic claim IDs)
+        if ($currentProcessing -like "Processing*") {
+            Write-Host "  SKIP: $sourcePath - Already being processed" -ForegroundColor Yellow
+            $skippedItems += @{ CSVItem = $csvItem; SPOItem = $matchingItem; Reason = "Already Processing" }
+            continue
+        }
+        
+        # Check Migrate column based on migration type
+        # Stage mode: Only process if Migrate is blank, empty, or "Stage"
+        # Migrate mode: Only process if Migrate is "Migrate", "Staged" or "StagedWithErrors"
+        $shouldProcess = $false
+        
+        if ($MigrationType -eq "Stage") {
+            # Stage mode - only process blank/empty/Stage items
+            if ($currentMigrate -eq "" -or $currentMigrate -eq "Stage") {
+                $shouldProcess = $true
+            } else {
+                Write-Host "  SKIP: $sourcePath - Migrate='$currentMigrate' (not eligible for Stage)" -ForegroundColor Yellow
+                $skippedItems += @{ CSVItem = $csvItem; SPOItem = $matchingItem; Reason = "Migrate='$currentMigrate'" }
+            }
+        }
+        elseif ($MigrationType -eq "Migrate") {
+            # Migrate mode - only process Migrate, Staged or StagedWithErrors items
+            if ($currentMigrate -eq "Migrate" -or $currentMigrate -eq "Staged" -or $currentMigrate -eq "StagedWithErrors") {
+                $shouldProcess = $true
+            } else {
+                Write-Host "  SKIP: $sourcePath - Migrate='$currentMigrate' (not eligible for Migrate)" -ForegroundColor Yellow
+                $skippedItems += @{ CSVItem = $csvItem; SPOItem = $matchingItem; Reason = "Migrate='$currentMigrate'" }
+            }
+        }
+        
+        if ($shouldProcess) {
+            Write-Host "  VALID: $sourcePath - Migrate='$currentMigrate'" -ForegroundColor Green
+            $itemsToProcess += @{ CSVItem = $csvItem; SPOItem = $matchingItem }
+        }
+    }
+    
+    Write-Host "`nValidation complete: $($itemsToProcess.Count) to process, $($skippedItems.Count) skipped" -ForegroundColor Cyan
+    
+    if ($itemsToProcess.Count -eq 0) {
+        Write-Host "No items eligible for $MigrationType" -ForegroundColor Yellow
+        return
+    }
+    
+    # PHASE 2: Mark ALL valid items as Processing BEFORE any migration starts
+    Write-Host "`nMarking all $($itemsToProcess.Count) items as Processing..." -ForegroundColor Yellow
+    foreach ($item in $itemsToProcess) {
+        if ($item.SPOItem) {
+            try {
+                Set-PnPListItem -List $listName -Identity $item.SPOItem.Id -Values @{
+                    "Processing" = "Processing"
+                    "Server" = $env:COMPUTERNAME
+                    "StartDate" = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                } -ErrorAction SilentlyContinue
+                Write-Host "  Marked: $($item.CSVItem.SourcePath)" -ForegroundColor Green
+            } catch {
+                Write-Host "  Warning: Could not mark $($item.CSVItem.SourcePath): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+    
+    # Create transcript log for this batch (separate folder from SPMT logs)
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $transcriptFolder = "F:\SPMTTranscripts"
+    if (-not (Test-Path $transcriptFolder)) { New-Item -Path $transcriptFolder -ItemType Directory -Force | Out-Null }
+    $transcriptPath = Join-Path $transcriptFolder "SPMTTranscript_Migration_$timestamp.log"
+    Start-Transcript -Path $transcriptPath -Append
+    
+    $successCount = 0
+    $failCount = 0
+    $skippedCount = $skippedItems.Count
+    
+    # PHASE 3: Process each validated item
+    foreach ($itemData in $itemsToProcess) {
+        $csvItem = $itemData.CSVItem
+        $matchingItem = $itemData.SPOItem
+        
+        $sourcePath = $csvItem.SourcePath
+        $targetUrl = $csvItem.TargetUrl
+        $targetList = if ($csvItem.TargetList) { $csvItem.TargetList } else { "Shared Documents" }
+        $targetRelPath = if ($csvItem.TargetRelativePath) { $csvItem.TargetRelativePath } else { "" }
+        
+        Write-Host "`n----------------------------------------" -ForegroundColor Cyan
+        Write-Host "Processing CSV Item" -ForegroundColor Cyan
+        Write-Host "Source: $sourcePath" -ForegroundColor Gray
+        Write-Host "Target: $targetUrl/$targetList" -ForegroundColor Gray
+        Write-Host "----------------------------------------" -ForegroundColor Cyan
+        
+        # Validate source path exists
+        if (-not (Test-Path $sourcePath)) {
+            Write-Host "ERROR: Source path does not exist: $sourcePath" -ForegroundColor Red
+            # Clear processing flag
+            if ($matchingItem) {
+                Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{ "Processing" = "" } -ErrorAction SilentlyContinue
+            }
+            $failCount++
+            continue
+        }
+        
+        # Check and add migration service account permissions BEFORE migration
+        Write-Host "Checking migration service account permissions..." -ForegroundColor Yellow
+        if (-not (Test-MigrationServiceAccountPermission -TargetSiteUrl $targetUrl)) {
+            Write-Host "ERROR: Failed to verify/add service account permissions on $targetUrl" -ForegroundColor Red
+            Write-Host "Please manually add '$MigrationServiceAccount' to Site Owners and retry" -ForegroundColor Yellow
+            # Clear processing flag
+            if ($matchingItem) {
+                Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{ "Processing" = "" } -ErrorAction SilentlyContinue
+            }
+            $failCount++
+            continue
+        }
+        
+        # Resolve the target list name - SPMT requires internal name ("Shared Documents") not display name ("Documents")
+        # Common mappings: "Documents" -> "Shared Documents", others use the name as-is
+        $resolvedTargetList = switch ($targetList) {
+            "Documents" { "Shared Documents" }
+            "" { "Shared Documents" }
+            $null { "Shared Documents" }
+            default { $targetList }
+        }
+        Write-Host "Target library: $targetList -> Resolved to: $resolvedTargetList" -ForegroundColor Cyan
+        
+        # Initialize error tracking variables
+        $fatalErrorFound = $false
+        $fatalErrorMessage = ""
+        $migrationStatus = $null
+        
+        try {
+            # Run SPMT in a SEPARATE PROCESS to avoid PnP assembly conflicts
+            Write-Host "Running SPMT migration in separate process..." -ForegroundColor Cyan
+            $spmtResult = Invoke-SPMTInSeparateProcess -SourcePath $sourcePath -TargetSiteUrl $targetUrl -TargetList $resolvedTargetList
+            
+            # Store report path
+            $migrationStatus = @{ ReportFolderPath = $spmtResult.ReportPath }
+            
+            # Check SPMT result
+            if (-not $spmtResult.Success) {
+                $fatalErrorFound = $true
+                $fatalErrorMessage = if ($spmtResult.ErrorMessage) { $spmtResult.ErrorMessage } else { "SPMT migration failed" }
+                Write-Host "SPMT migration FAILED: $fatalErrorMessage" -ForegroundColor Red
+            } else {
+                Write-Host "SPMT migration completed successfully!" -ForegroundColor Green
+            }
+            
+            Write-Host "Migration Report: $($spmtResult.ReportPath)" -ForegroundColor Cyan
+            
+            # Wait for reports to be written
+            Start-Sleep -Seconds 10
+            
+            # Collect all errors from migration reports (skipped/failed items)
+            $migrationErrors = @()
+            
+            # Check for FatalError in reports (only if not already detected from task validation)
+            # Don't reset fatalErrorFound - preserve any errors from task validation check
+            
+            if ($migrationStatus.ReportFolderPath -and (Test-Path $migrationStatus.ReportFolderPath)) {
+                $taskReportFolders = Get-ChildItem -Path $migrationStatus.ReportFolderPath -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "TaskReport_*" }
+                
+                foreach ($taskFolder in $taskReportFolders) {
+                    # Check for ItemReports to collect skipped/failed items
+                    $itemReports = Get-ChildItem -Path $taskFolder.FullName -File -Filter "ItemReport_R1*.csv" -ErrorAction SilentlyContinue
+                    
+                    foreach ($report in $itemReports) {
+                        Write-Host "Processing report: $($report.FullName)" -ForegroundColor Cyan
+                        
+                        $errors = Import-Csv $report.FullName | 
+                            Where-Object { $_.status -eq "skipped" -or $_.status -eq "failed" } |
+                            Select-Object Status, "Item name", Source, Message, "Result category"
+                        
+                        if ($errors) {
+                            Write-Host "Found $(($errors | Measure-Object).Count) errors/skips in this report" -ForegroundColor Yellow
+                            $migrationErrors += $errors
+                        }
+                    }
+                    
+                    # Check for FatalError reports
+                    $fatalErrorReports = Get-ChildItem -Path $taskFolder.FullName -File -Filter "FatalError_*.csv" -ErrorAction SilentlyContinue
+                    
+                    if ($fatalErrorReports.Count -gt 0) {
+                        $fatalErrorFound = $true
+                        Write-Host "FATAL ERROR detected in migration reports!" -ForegroundColor Red
+                        
+                        foreach ($fatalReport in $fatalErrorReports) {
+                            try {
+                                $fatalErrors = Import-Csv $fatalReport.FullName
+                                foreach ($fe in $fatalErrors) {
+                                    $fatalErrorMessage += "$($fe.Message); "
+                                    Write-Host "FatalError: $($fe.Message)" -ForegroundColor Red
+                                    $migrationErrors += [PSCustomObject]@{
+                                        Status = "FatalError"
+                                        "Item name" = $fe.Source
+                                        Source = $fe.Source
+                                        Message = $fe.Message
+                                        "Result category" = "FatalError"
+                                    }
+                                }
+                            } catch {
+                                Write-Host "Could not read FatalError report: $($_.Exception.Message)" -ForegroundColor Yellow
+                            }
+                        }
+                    }
+                }
+            }
+            
+            # Create FailureSummaryReport2.csv if there are errors
+            $summaryReportPath = $null
+            if ($migrationErrors.Count -gt 0) {
+                Write-Host "Creating FailureSummaryReport2.csv with $($migrationErrors.Count) errors..." -ForegroundColor Cyan
+                $summaryReportPath = New-FailureSummaryReport -MigrationErrors $migrationErrors -ReportFolderPath $migrationStatus.ReportFolderPath
+            }
+            
+            # Update SPO list item status based on result
+            # Reconnect to tracking site first (we may be connected to target site)
+            Ensure-PnPConnection -ForceReconnect | Out-Null
+            
+            if ($fatalErrorFound) {
+                $failCount++
+                Write-Host "Migration FAILED (FatalError) for: $sourcePath" -ForegroundColor Red
+                Write-Host "Error: $fatalErrorMessage" -ForegroundColor Red
+                
+                # Update SPO list
+                if ($matchingItem) {
+                    $statusValue = if ($MigrationType -eq "Stage") { "StageFailed" } else { "Failed" }
+                    $logValue = Format-LogFieldValue -ReportFolderPath $migrationStatus.ReportFolderPath -TranscriptPath $transcriptPath
+                    try {
+                        Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{
+                            "Processing" = ""
+                            "Migrate" = $statusValue
+                            "CompletedDate" = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                            "ScriptError" = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][MIGRATION] FatalError: $fatalErrorMessage"
+                            "LOG" = $logValue
+                        } -ErrorAction Stop
+                        Write-Host "Updated SPO list item $($matchingItem.Id) with failure status" -ForegroundColor Yellow
+                        
+                        # Attach FailureSummaryReport2.csv if it exists
+                        if ($summaryReportPath -and (Test-Path $summaryReportPath)) {
+                            Write-Host "Attaching FailureSummaryReport2.csv to list item..." -ForegroundColor Cyan
+                            Add-MigrationReportAttachment -ListItem $matchingItem -ReportPath $summaryReportPath -ReportFolderPath $migrationStatus.ReportFolderPath -TranscriptPath $transcriptPath
+                        }
+                    }
+                    catch {
+                        Write-Host "Warning: Failed to update SPO list: $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "Warning: No matching SPO list item found for: $sourcePath" -ForegroundColor Yellow
+                }
+            } elseif ($migrationErrors.Count -eq 0) {
+                # Complete success - no errors at all
+                $successCount++
+                Write-Host "Migration completed successfully for: $sourcePath (no errors)" -ForegroundColor Green
+                
+                # Update SPO list
+                if ($matchingItem) {
+                    $statusValue = if ($MigrationType -eq "Stage") { "Staged" } else { "Migrated" }
+                    $logValue = Format-LogFieldValue -ReportFolderPath $migrationStatus.ReportFolderPath -TranscriptPath $transcriptPath
+                    Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{
+                        "Processing" = ""
+                        "Migrate" = $statusValue
+                        "CompletedDate" = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                        "LOG" = $logValue
+                    } -ErrorAction SilentlyContinue
+                    Write-Host "Updated SPO list item $($matchingItem.Id) with success status" -ForegroundColor Green
+                    
+                    # POST-MIGRATION ACTIONS (Menu 2 - Migrate only, complete success)
+                    if ($MigrationType -eq "Migrate") {
+                        # Launch Reacl automatically on successful migration (background process)
+                        # Sets USER groups and Creator Owner to read-only on the migrated folder
+                        Write-Host "Launching REACL - setting source folder to read-only..." -ForegroundColor Cyan
+                        Set-SourceReadOnly -SourcePath $sourcePath -ListItem $matchingItem
+                        
+                        # DeleteSource - Launch source deletion in NEW WINDOW
+                        # This opens a new PowerShell window, reads ItemReport, deletes migrated files,
+                        # creates DeletionReport.csv, and attaches it to the SPO list item
+                        Write-Host "`n========================================" -ForegroundColor Yellow
+                        Write-Host "LAUNCHING SOURCE DELETION IN NEW WINDOW" -ForegroundColor Yellow
+                        Write-Host "========================================" -ForegroundColor Yellow
+                        Write-Host "This will delete files from source that have Status='Migrated'" -ForegroundColor Cyan
+                        Write-Host "A deletion report will be created and attached to the list item" -ForegroundColor Cyan
+                        
+                        $deletionResult = Start-SourceDeletionInNewWindow -SourcePath $sourcePath -ReportFolderPath $migrationStatus.ReportFolderPath -SiteUrl $siteUrl -ListName $listName -ListItemId $matchingItem.Id -UseAppAuth $UseAppAuth -AppClientId $AppClientId -AppTenantId $AppTenantId -AppCertThumbprint $AppCertificateThumbprint
+                        
+                        if ($deletionResult.Success) {
+                            Write-Host "Source deletion process launched (PID: $($deletionResult.ProcessId))" -ForegroundColor Green
+                            Write-Host "Deletion report will be saved to: $($deletionResult.DeletionReportPath)" -ForegroundColor Gray
+                        } else {
+                            Write-Host "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ForegroundColor Red
+                            Update-ListItemError -ListItem $matchingItem -ErrorMessage "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ErrorCategory "SOURCE_DELETION"
+                        }
+                    }
+                }
+            } else {
+                # Partial success - some errors/skipped items
+                $successCount++
+                Write-Host "Migration completed with $($migrationErrors.Count) errors/skips for: $sourcePath" -ForegroundColor Yellow
+                
+                # Update SPO list
+                if ($matchingItem) {
+                    $statusValue = if ($MigrationType -eq "Stage") { "StagedWithErrors" } else { "MigratedWithErrors" }
+                    $logValue = Format-LogFieldValue -ReportFolderPath $migrationStatus.ReportFolderPath -TranscriptPath $transcriptPath
+                    Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{
+                        "Processing" = ""
+                        "Migrate" = $statusValue
+                        "CompletedDate" = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                        "LOG" = $logValue
+                    } -ErrorAction SilentlyContinue
+                    Write-Host "Updated SPO list item $($matchingItem.Id) with partial success status" -ForegroundColor Yellow
+                    
+                    # Attach FailureSummaryReport2.csv
+                    if ($summaryReportPath -and (Test-Path $summaryReportPath)) {
+                        Write-Host "Attaching FailureSummaryReport2.csv to list item..." -ForegroundColor Cyan
+                        Add-MigrationReportAttachment -ListItem $matchingItem -ReportPath $summaryReportPath -ReportFolderPath $migrationStatus.ReportFolderPath -TranscriptPath $transcriptPath
+                    }
+                    
+                    # POST-MIGRATION ACTIONS (Menu 2 - Migrate only, partial success)
+                    if ($MigrationType -eq "Migrate") {
+                        # Launch source deletion in NEW WINDOW - deletes ONLY successfully migrated files
+                        # Failed/skipped files will remain in source for re-migration attempt
+                        Write-Host "`n========================================" -ForegroundColor Yellow
+                        Write-Host "LAUNCHING SOURCE DELETION IN NEW WINDOW" -ForegroundColor Yellow
+                        Write-Host "========================================" -ForegroundColor Yellow
+                        Write-Host "This will delete ONLY files with Status='Migrated'" -ForegroundColor Cyan
+                        Write-Host "Failed/skipped files will remain for re-migration" -ForegroundColor Yellow
+                        Write-Host "A deletion report will be created and attached to the list item" -ForegroundColor Cyan
+                        
+                        $deletionResult = Start-SourceDeletionInNewWindow -SourcePath $sourcePath -ReportFolderPath $migrationStatus.ReportFolderPath -SiteUrl $siteUrl -ListName $listName -ListItemId $matchingItem.Id -UseAppAuth $UseAppAuth -AppClientId $AppClientId -AppTenantId $AppTenantId -AppCertThumbprint $AppCertificateThumbprint
+                        
+                        if ($deletionResult.Success) {
+                            Write-Host "Source deletion process launched (PID: $($deletionResult.ProcessId))" -ForegroundColor Green
+                            Write-Host "Deletion report will be saved to: $($deletionResult.DeletionReportPath)" -ForegroundColor Gray
+                        } else {
+                            Write-Host "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ForegroundColor Red
+                            Update-ListItemError -ListItem $matchingItem -ErrorMessage "Failed to launch source deletion: $($deletionResult.ErrorMessage)" -ErrorCategory "SOURCE_DELETION"
+                        }
+                        
+                        # Do NOT perform Reacl on partial success
+                        Write-Host "Skipping Reacl due to errors - source must remain writable for re-migration" -ForegroundColor Yellow
+                    }
+                }
+            }
+            
+            # SPMT cleanup not needed - runs in separate process
+        }
+        catch {
+            $failCount++
+            Write-Host "Migration FAILED for: $sourcePath" -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            
+            # Update SPO list with exception error - reconnect to tracking site first
+            try {
+                Ensure-PnPConnection -ForceReconnect | Out-Null
+                $spoListItems = Get-PnPListItem -List $listName -PageSize 500 -ErrorAction SilentlyContinue
+                $matchingItem = $spoListItems | Where-Object { 
+                    $spSource = if ($_["SourcePath"]) { $_["SourcePath"].ToString().Trim() } else { "" }
+                    $spSource -eq $sourcePath.Trim()
+                } | Select-Object -First 1
+                
+                if ($matchingItem) {
+                    $statusValue = if ($MigrationType -eq "Stage") { "StageFailed" } else { "Failed" }
+                    Set-PnPListItem -List $listName -Identity $matchingItem.Id -Values @{
+                        "Processing" = ""
+                        "Migrate" = $statusValue
+                        "CompletedDate" = (Get-Date).ToString('MM/dd/yyyy HH:mm:ss')
+                        "ScriptError" = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][EXCEPTION] $($_.Exception.Message)"
+                    } -ErrorAction SilentlyContinue
+                    Write-Host "Updated SPO list item $($matchingItem.Id) with exception error status" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "Warning: Could not update SPO list after exception: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+            
+            # SPMT cleanup not needed - runs in separate process
+        }
+    }
+    
+    Stop-Transcript
+    
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "CSV $MigrationType Complete" -ForegroundColor Cyan
+    Write-Host "Success: $successCount | Failed: $failCount | Skipped: $skippedCount" -ForegroundColor Cyan
+    Write-Host "Log: $transcriptPath" -ForegroundColor Cyan
+    Write-Host "========================================`n" -ForegroundColor Cyan
+}
+
+#endregion
+
+#region ===== MAIN SCRIPT EXECUTION =====
+
+# Authentication handling - differs based on $UseAppAuth
+if ($UseAppAuth) {
+    # App-Only Authentication (Scheduled Task mode)
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "   App-Only Authentication Mode" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    
+    # Validate app auth configuration
+    if ([string]::IsNullOrEmpty($AppClientId) -or 
+        [string]::IsNullOrEmpty($AppTenantId) -or 
+        [string]::IsNullOrEmpty($AppCertificateThumbprint)) {
+        Write-Host "ERROR: App authentication requires AppClientId, AppTenantId, and AppCertificateThumbprint to be configured!" -ForegroundColor Red
+        exit 1
+    }
+    
+    Write-Host "Client ID: $AppClientId" -ForegroundColor Gray
+    Write-Host "Tenant ID: $AppTenantId" -ForegroundColor Gray
+    Write-Host "Certificate: $AppCertificateThumbprint" -ForegroundColor Gray
+       
+    # Note: SPO Service connection is NOT supported with certificate auth
+    # PnP connections will be established as needed using certificate auth
+    Write-Debug-Message "Note: SPO Service Admin commands not available in app-only mode" "Yellow"
+    Write-Debug-Message "PnP connections will use certificate authentication" "Yellow"
+}
+else {
+    # Interactive Authentication (Manual mode)
+    
+    # Try to load saved credentials first
+    $credResult = Load-SPMTCredentials
+
+    if (-not $credResult) {
+        $fullUsername = "$domain"
+        Write-Host "No saved credentials found. Prompting for SharePoint Online credentials..." -ForegroundColor Yellow
+        $SPOCredential = Get-Credential -Message "SPO ADMIN UPN/Pass" -UserName $fullUsername
+        
+        if ($SPOCredential) {
+            if (Test-SPOCredentials -Credential $SPOCredential) {
+                Save-SPMTCredentials -Credential $SPOCredential
+                Write-Host "Credentials validated and saved for future use." -ForegroundColor Green
+            } else {
+                Write-Host "Invalid credentials. Please try again." -ForegroundColor Red
+                $SPOCredential = $null
+            }
+        } else {
+            Write-Host "No credentials provided. SPMT migrations may fail." -ForegroundColor Red
+        }
+    } else {
+        Write-Host "Using saved SPO credentials." -ForegroundColor Green
+    }
+
+    # Establish SPO Admin connection
+    if (-not (Is-SPOServiceConnected)) {
+        Write-Host "Connecting to SPO Admin interactively (MFA Required)..." -ForegroundColor Yellow
+        try {
+            Connect-SPOService -Url $adminUrl -ErrorAction Stop
+            Write-Host "Connected to SPO Admin successfully." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "Failed to connect to SPO Admin: $($_.Exception.Message)" -ForegroundColor Red
+            exit
+        }
+    }
+    else {
+        Write-Host "Using existing SPO Admin connection." -ForegroundColor Green
+    }
+}
+
+# Establish PnP connection
+if (-not (Ensure-PnPConnection)) {
+    Write-Host "Failed to establish PnP connection. Exiting." -ForegroundColor Red
+    exit
+}
+
+# ==========================================
+# AUTORUN MODE (For Scheduled Tasks)
+# ==========================================
+if ($AutoRun) {
+    $scriptStartTime = Get-Date
+    $iteration = 0
+    
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "   AUTORUN MODE - Scheduled Task Execution" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Date Cutoff: $DateCutoff ($YearsToMigrate years)" -ForegroundColor Yellow
+    Write-Host "App Authentication: $UseAppAuth" -ForegroundColor Yellow
+    Write-Host "Migration Type: $MigrationType" -ForegroundColor Yellow
+    if ($Continuous) {
+        Write-Host "Continuous Mode: ENABLED" -ForegroundColor Green
+        Write-Host "Max Runtime: $(if ($MaxRuntime -eq 0) { 'Unlimited' } else { "$MaxRuntime hours" })" -ForegroundColor Yellow
+    }
+    if ($UseScheduling) {
+        Write-Host "Scheduling Mode: ENABLED (per-item timezone windows)" -ForegroundColor Green
+        Write-Host "  Blocked: Weekdays 6 AM - 5 PM (in item's timezone)" -ForegroundColor Gray
+        Write-Host "  Allowed: Weekdays 5 PM - 6 AM, Weekends, Holidays" -ForegroundColor Gray
+    }
+    Write-Host ""
+    Write-Host "Automatically executing: SPO List $MigrationType" -ForegroundColor Green
+    
+    # Validate app auth is configured when running as scheduled task
+    if ($UseAppAuth) {
+        if ([string]::IsNullOrEmpty($AppClientId) -or 
+            [string]::IsNullOrEmpty($AppTenantId) -or 
+            [string]::IsNullOrEmpty($AppCertificateThumbprint)) {
+            Write-Host "ERROR: App authentication is enabled but configuration is incomplete!" -ForegroundColor Red
+            Write-Host "Please configure AppClientId, AppTenantId, and AppCertificateThumbprint." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "App Client ID: $AppClientId" -ForegroundColor Gray
+        Write-Host "App Tenant ID: $AppTenantId" -ForegroundColor Gray
+        Write-Host "Certificate Thumbprint: $AppCertificateThumbprint" -ForegroundColor Gray
+    }
+    
+    Write-Host ""
+    Write-Host "Starting $MigrationType..." -ForegroundColor Cyan
+    
+    # Continuous mode loop
+    do {
+        $iteration++
+        
+        # Check MaxRuntime
+        if ($Continuous -and $MaxRuntime -gt 0) {
+            $elapsed = (Get-Date) - $scriptStartTime
+            if ($elapsed.TotalHours -ge $MaxRuntime) {
+                Write-Host "`n============================================" -ForegroundColor Yellow
+                Write-Host "MaxRuntime of $MaxRuntime hours reached." -ForegroundColor Yellow
+                Write-Host "Total iterations: $iteration" -ForegroundColor Yellow
+                Write-Host "============================================" -ForegroundColor Yellow
+                break
+            }
+            $remainingHours = [Math]::Round($MaxRuntime - $elapsed.TotalHours, 2)
+            Write-Host "`n[Iteration $iteration] Runtime: $([Math]::Round($elapsed.TotalHours, 2))h / ${MaxRuntime}h (${remainingHours}h remaining)" -ForegroundColor Cyan
+        } elseif ($Continuous) {
+            Write-Host "`n[Iteration $iteration] Continuous mode - no time limit" -ForegroundColor Cyan
+        }
+        
+        # Execute SPO List migration with specified type
+        Start-SPOListMigration -MigrationType $MigrationType
+        
+        # If not continuous, exit the loop after one iteration
+        if (-not $Continuous) {
+            break
+        }
+        
+        # Check if there are more items to process
+        Write-Host "`nChecking for more items..." -ForegroundColor Cyan
+        
+        # Brief pause before checking for more (avoid hammering SPO)
+        Start-Sleep -Seconds 5
+        
+        # Peek at available items without marking them as Processing
+        if (-not (Ensure-PnPConnection -ForceReconnect)) {
+            Write-Host "Lost connection to SharePoint. Exiting continuous loop." -ForegroundColor Red
+            break
+        }
+        
+        $listItems = Get-PnPListItem -List $listName -PageSize 100 -ErrorAction SilentlyContinue
+        $availableItems = $listItems | Where-Object {
+            $m = if ($_["Migrate"]) { $_["Migrate"].ToString().Trim() } else { "" }
+            $p = if ($_["Processing"]) { $_["Processing"].ToString().Trim() } else { "" }
+            $s = if ($_["SourcePath"]) { $_["SourcePath"].ToString().Trim() } else { "" }
+            $matchesType = (
+                ($MigrationType -eq "Stage" -and $m -eq "Stage") -or
+                ($MigrationType -eq "Migrate" -and $m -eq "Migrate") -or
+                ($MigrationType -eq "MigrateOnly" -and $m -eq "Migrate")
+            )
+            $matchesType -and $p -notlike "Processing*" -and -not [string]::IsNullOrWhiteSpace($s)
+        }
+        
+        $remainingCount = ($availableItems | Measure-Object).Count
+        
+        if ($remainingCount -eq 0) {
+            Write-Host "No more items available for $MigrationType. Exiting continuous loop." -ForegroundColor Green
+            break
+        }
+        
+        # When scheduling is enabled, check if any items are within their migration window
+        if ($UseScheduling) {
+            $inWindowCount = 0
+            $blockedCount = 0
+            foreach ($item in $availableItems) {
+                if (Test-InMigrationWindow -ListItem $item) {
+                    $inWindowCount++
+                } else {
+                    $blockedCount++
+                }
+            }
+            
+            if ($inWindowCount -eq 0) {
+                Write-Host "All $remainingCount remaining items are blocked by scheduling (outside their migration windows)." -ForegroundColor Yellow
+                Write-Host "Exiting continuous loop - will process items when their windows open." -ForegroundColor Yellow
+                break
+            } else {
+                Write-Host "Found $inWindowCount items in-window, $blockedCount blocked by scheduling. Continuing..." -ForegroundColor Green
+            }
+        } else {
+            Write-Host "Found $remainingCount more items. Continuing..." -ForegroundColor Green
+        }
+        
+    } while ($Continuous)
+    
+    # Final summary
+    $totalRuntime = (Get-Date) - $scriptStartTime
+    Write-Host "`n============================================" -ForegroundColor Green
+    Write-Host "AutoRun execution completed." -ForegroundColor Green
+    Write-Host "Total iterations: $iteration" -ForegroundColor Green
+    Write-Host "Total runtime: $([Math]::Round($totalRuntime.TotalHours, 2)) hours" -ForegroundColor Green
+    Write-Host "============================================" -ForegroundColor Green
+    exit 0
+}
+
+# ==========================================
+# INTERACTIVE MODE (Manual Execution)
+# ==========================================
+
+# Present migration type selection menu
+Clear-Host
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "   Common Drive Migration Tool v$toolversion" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Date Cutoff: $DateCutoff ($YearsToMigrate years)" -ForegroundColor Yellow
+Write-Host "Target URL Required: $RequiredTargetUrlPrefix*" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Select Migration Type:" -ForegroundColor Yellow
+Write-Host "1: CSV Stage Only" -ForegroundColor Green
+Write-Host "2: CSV Migrate Only" -ForegroundColor Green
+Write-Host "3: SPO List Stage" -ForegroundColor Green
+Write-Host "4: SPO List Migrate" -ForegroundColor Green
+Write-Host "5: Clear Saved Credentials" -ForegroundColor Yellow
+Write-Host "6: Exit" -ForegroundColor Gray
+Write-Host ""
+
+do {
+    $selection = Read-Host "Enter your selection (1-6)"
+    switch ($selection) {
+        "1" { $MigrationType = "Stage"; $SourceType = "CSV" }
+        "2" { $MigrationType = "Migrate"; $SourceType = "CSV" }
+        "3" { $MigrationType = "Stage"; $SourceType = "SPOList" }
+        "4" { $MigrationType = "Migrate"; $SourceType = "SPOList" }
+        "5" { $MigrationType = "ClearCreds" }
+        "6" { Write-Host "Exiting..." -ForegroundColor Yellow; exit }
+        default { 
+            Write-Host "Invalid selection. Please enter 1-6" -ForegroundColor Red 
+            $MigrationType = $null
+        }
+    }
+} while ($null -eq $MigrationType)
+
+Write-Host ""
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "Running script in $MigrationType mode" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Handle credential clearing
+if ($MigrationType -eq "ClearCreds") {
+    if (Clear-SavedCredentials) {
+        Write-Host "Credentials have been cleared." -ForegroundColor Green
+        Write-Host "Please enter new credentials:" -ForegroundColor Yellow
+        
+        $fullUsername = "$domain"
+        $SPOCredential = Get-Credential -Message "SPO ADMIN UPN/Pass" -UserName $fullUsername
+        
+        if ($SPOCredential) {
+            if (Test-SPOCredentials -Credential $SPOCredential) {
+                Save-SPMTCredentials -Credential $SPOCredential
+                Write-Host "New credentials validated and saved." -ForegroundColor Green
+            } else {
+                Write-Host "Invalid credentials." -ForegroundColor Red
+            }
+        }
+    }
+    
+    Write-Host "Returning to main menu..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+    # Re-run the script
+    & $PSCommandPath
+    exit
+}
+
+# Execute based on source type
+switch ($SourceType) {
+    "CSV" {
+        $csvFile = Show-CSVFileMenu -MigrationType $MigrationType
+        if ($null -ne $csvFile) {
+            Start-CSVMigration -MigrationType $MigrationType -CSVPath $csvFile
+        } else {
+            Write-Host "No CSV file selected. Exiting." -ForegroundColor Yellow
+        }
+    }
+    "SPOList" {
+        Start-SPOListMigration -MigrationType $MigrationType
+    }
+}
+
+Write-Host "`nScript execution completed." -ForegroundColor Green
+
+#endregion

@@ -1,0 +1,486 @@
+<#
+ https://contoso.spo.microsoft.scloud/sites/000001/Lists/OneDriveMigrationStatus/
+ Common 2 OneDrive (not common) 
+ Script is used for migrating SharePoint data from on-premises to SharePoint Online (SPO USSec).
+ It uses the SharePoint Migration Tool (SPMT) and PowerShell modules listed.
+ Script first imports the necessary modules and DLLs.
+ It then sets up logging and gets credentials for SPO and On-Prem SharePoint.
+ Script connects to the SharePoint site that hosts the SP list and retrieves the list items.
+ It initializes an array to store users that should be processed.
+ Script checks each item in the list to see if it should be skipped or processed.
+ If the item should be processed, it is added to the $itemsToProcess array.
+ Script then enters the main migration loop, where it processes each site in the $itemsToProcess array.
+ It initiates the migration, executes the SharePoint Migration, and checks the migration status.
+ Script updates the 'Processing' column to indicate item is set to be migrated so it will not run from other script run
+ If the migration is successful, it updates the list with the log location and sets the 'Migrate' column to 'Migrated'.
+ If the migration generates a Error Log, the list is updated with the actual log file, and the error file is emailed to the specific user via PowerAutomate.
+ If the migration fails, it updates the 'Migrate' column to 'Failed'.
+ Script will updates users AD properties- removes/add security groups, removes onprem permissions
+ Script pauses for 120 seconds between each migration.
+ After all migrations are complete, it stops the transcript.
+ Author: Douglas Cox, 03 June 2024, v3.2
+#>
+
+# If you do not want to remove onprem onedrive permissions and do not want to update AD properties for migrations with FailureSummaryReport.csv # line 289. This will perform migration and upload failuresummaryreport. This will perform migration and upload failuresummaryreport for review.
+
+# Check if SPOCredntial is already set
+
+if (-not $SPOCredential) {
+    # Get Credentials for SPO
+    $domain = "@contoso.gov"
+    $fullUsername1 = "$domain"
+    $SPOCredential = Get-Credential -Message "SPO ADMIN UPN/Pass" -UserName $fullUsername1
+  
+} else {
+    Write-Host "Using existing SPO credentials." -ForegroundColor Green
+
+}
+
+
+# Check if OnPremCredential is already set
+
+if (-not $OnPremCredential) {
+    # Get Credentials for SP OnPrem
+    $OnPremCredential = Get-Credential -Message "On-Prem SharePoint Admin"
+  
+} else {
+    Write-Host "Using existing On-Prem credentials." -ForegroundColor Green
+
+}
+
+# SPO Site URL - where SPO List is located
+$siteUrl = "https://contoso.spo.microsoft.scloud/sites/000001"
+
+# Patch to SP Migratoin Tool bits, required for PowerShell to work
+$SPMTPATH = "F:\SPMT-migration_tool.9\microsoft.sharepoint.migrationtool.advancedapp.exe"
+
+Write-Host "Checking if required PowerShell modules are loaded... loading if not." -ForegroundColor Green
+
+# Function to check if a module is loaded, and if not, load it
+function Ensure-Module {
+    param (
+        [string]$ModuleName
+    )    
+    #Write-Host "Checking if module $ModuleName is loaded..." -ForegroundColor Green
+    if (-not (Get-Module -Name $ModuleName -ListAvailable)) {
+        Write-Host "Module $ModuleName not found.  Installing...." -ForegroundColor Green
+        Install-Module -Name $ModuleName -Force -Scope CurrentUser
+    }
+    Import-Module -Name $ModuleName
+    #Write-Host "Importing module $ModuleName ..." -ForegroundColor Green
+}
+
+# Ensure required modules are loaded
+Ensure-Module -ModuleName "Microsoft.Online.SharePoint.PowerShell"
+Ensure-Module -ModuleName "Microsoft.SharePoint.MigrationTool.PowerShell"
+Ensure-Module -ModuleName "ActiveDirectory"
+Ensure-Module -ModuleName "PnP.PowerShell"
+
+# Loading SPMT tool to ensure required files are present, then killing process
+$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+$startInfo.FileName = $SPMTPATH
+$startInfo.Arguments = "/silent"
+$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+$startInfo.UseShellExecute = $false
+
+$process = New-Object System.Diagnostics.Process
+$process.StartInfo = $startInfo
+$process.Start() | Out-Null
+Start-Sleep -Seconds 5
+$process.Kill()
+
+# Function to check if there is an active connection to PnPOnline
+function Is-PnPOnlineConnected {
+    Write-Host "Checking if there is an active connection to PnPOnline..." -ForegroundColor Green
+    try {
+        $pnpContext = Get-PnPConnection
+        Write-Host "Active connection to PnPOnline found..." -ForegroundColor Green
+        return $true
+    } catch {
+                Write-Host "No active connection to PnPOnline..." -ForegroundColor Green
+        return $false
+    }
+}
+
+# Connect to PnPOnline if not already connected
+if (-not (Is-PnPOnlineConnected)) {
+    Write-Host "Connecting to PnPOnline....... Please wait..." -ForegroundColor Yellow
+    Connect-PnPOnline -Url $siteUrl -UseWebLogin
+}
+
+# Add any Blocked Etx
+$BlockedExtensions = "aspx","pst","exe","dll"#,"ade","adp","asa","ashx","asmx","asp","bas","cdx","chm","class","cnt","com","config","cpl","crt","csh","der","fxp","gadget","grp","hlp","hpj","hta","htr","htw","ida","idc","idq","ins","isp","its","jse","ksh","mad","maf","mag","mam","maq","mar","mas","mat","mau","mav","maw","mcf","mda","mde","mdt","mdw","mdz","msc","msh","msh1","msh1xml","msh2","msh2xml","mshxml","msi","ms-one-stub","msp","mst","ops","pcd","pif","pl","prf","prg","printer","ps2","ps2xml","psc1","psc2","rem","scf","scr","sct","shb","shs","shtm","shtml","soap","stm","svc","vb","vbe","vsix","ws","wsc","wsf","wsh","xamlx"
+
+# Additional AD properties to remove/add groups
+$groupPattern = "*REDIRECTION*"
+$additionalGroup = "SecFltr-USR-OneDrive"
+$targetGroup = "SecFltr-USR-Office365"
+# Find all groups that match the pattern
+$groups = Get-ADGroup -Filter "Name -like '$groupPattern'"
+
+# Log Variables (Transcript and SPMT)
+$LoggingTranscript = "F:\SPMTLOGS"
+$LoggingSharePointMigration = "F:\SPMTLOGS"
+
+# Initialize logging
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$logFileName = "Log_${Env:COMPUTERNAME}_${timestamp}.log"
+$logFilePath = Join-Path -Path $LoggingTranscript -ChildPath $logFileName
+Start-Transcript -Path $logFilePath
+
+# SharePoint list name
+$listName = "OneDriveMigrationStatus"
+
+# Get the SharePoint list items
+$listItems = Get-PnPListItem -List $listName
+
+# Set base URLs and users
+$sourceBaseUrl = "https://onedrive.contoso-onprem.local/my/"
+$targetBaseUrl = "https://contoso-my.spo.microsoft.scloud/personal/"
+
+# Load SharePoint DLLs
+try {
+    Add-Type -Path "F:\Tools\Microsoft.SharePoint.Client.dll" -ErrorAction Stop
+    Add-Type -Path "F:\Tools\Microsoft.SharePoint.Client.Runtime.dll" -ErrorAction Stop
+} catch {
+    Write-Host "Failed to load SharePoint DLLs: $_"
+    exit 1
+}
+
+# Initialize an array to store users that should be processed
+$usersToProcess = @()
+
+# Check if the user should be skipped and add to $usersToProcess if user should be processed
+foreach ($item in $listItems) {
+    $user = $item["Title"]
+
+    # Check if the user should be skipped
+    if (($item["migrate"] -eq "Migrate" -and ($item["Inprocess"] -eq "Processing" -or $item["migrate"] -eq "Migrated")) -or $item["migrate"] -eq $null -or $item["migrate"] -eq "") {
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Skipping migration for user $user because the user is already being processed, already migrated, or migrate column is blank."
+        continue # Skip to the next user
+    }
+
+    # If the user meets the criteria, add to the list of users to process
+    if ($item["migrate"] -eq "Migrate") {
+        $usersToProcess += $user
+    }
+
+    # Set Inprocess column to "Processing" for users with migrate column set to "migrate"
+    if ($item["migrate"] -eq "Migrate") {
+        $item["Inprocess"] = "Processing"
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"Inprocess" = "Processing"}
+    }
+
+    # Set Server column to Server processing specific user migation
+    $server = $Env:COMPUTERNAME
+    if ($item["migrate"] -eq "Migrate") {
+        $item["Inprocess"] = "Processing"
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"Server" = $Env:COMPUTERNAME}
+    }
+}
+
+
+# Main migration loop
+foreach ($user in $usersToProcess) {
+    $item = $listItems | Where-Object { $_["Title"] -eq $user }
+
+    # Get the current date
+    $currentDate = (Get-Date).AddHours(0).ToString('MM/dd/yyyy HH:mm:ss')
+    # Add Starte Date/Time
+    Set-PnPListItem -List $listName -Identity $item.Id -Values @{"DateStarted" = $currentDate}  
+
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Initiating migration for user $user" -ForegroundColor Green
+
+    # Construct URL's based on username and start migration
+    $sourceUrl = "$sourceBaseUrl$user"
+    $targetUrl = "$targetBaseUrl${user}_contoso_gov"
+
+    # Execute SharePoint Migration
+    Register-SPMTMigration -SPOCredential $SPOCredential -SkipFilesWithExtension $BlockedExtensions -WorkingFolder $LoggingSharePointMigration -KeepAllVersions $true -MigrateFileVersionHistory $true -ReplacementOfInvalidChar "_" #-MigrateFilesCreatedAfter "05/01/2024" -MigrateFilesModifiedAfter "05/01/2024"
+    
+    Add-SPMTTask -SharePointSourceSiteUrl $sourceUrl -TargetSiteUrl $targetUrl -MigrateAll -SharePointSourceCredential $OnPremCredential
+
+    Start-SPMTMigration
+
+    $migrationStatus = Get-SPMTMigration
+
+    # Get the current date
+    $currentDate2 = (Get-Date).AddHours(0).ToString('MM/dd/yyyy HH:mm:ss')
+
+    # Function to check transcript log for errors
+function migrationStatus.StatusOfTasks.Status {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$logFilePath
+    )
+
+    # Read the log file
+    #$logContent = Get-Content -Path $logFilePath
+
+    # Check for errors
+    if ($migrationStatus.StatusOfTasks.Status -ne "COMPLETED") {
+        return $true
+    } else {
+        return $false
+    }
+ }
+
+    # Check migrationstatus for errors and update item as failed
+    $hasErrors = migrationStatus.StatusOfTasks.Status -logFilePath $logFilePath
+
+    if ($migrationStatus.StatusOfTasks.Status -ne "COMPLETED") {
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') *** Error: Migration failed for user $user."
+
+        Write-host $message -ForegroundColor Red
+        
+
+        # If migration failed, update the 'migrate' column to 'failed'
+        $item["migrate"] = "Failed"
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"migrate" = "Failed"}
+        
+        # Update List with log location and update Inprocessing to blank
+        $server = $Env:COMPUTERNAME
+        $reportFolderpath = $migrationStatus.ReportFolderPath
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"Log" = "$server $reportFolderpath $logFilePath"}
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"Inprocess" = ""}
+
+        # Loop test message
+        Write-Host "****************************** Failed Migration *******************************************" -ForegroundColor Yellow
+    }
+    
+   
+
+    # If migration status is successful, continue processing
+    elseif ($migrationStatus.Status -eq "Finished") {
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Migration successful for user $user" -ForegroundColor Green
+
+        # Update List with log location
+        $server = $Env:COMPUTERNAME
+        $reportFolderpath = $migrationStatus.ReportFolderPath
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"Log" = "$server $reportFolderpath $logFilePath"}
+
+        # After successful migration update columns, processing, migrate, migrationdate
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"migrate" = "Migrated"; "Inprocess" = "";"DateMigrated" = $currentDate2}
+
+        # Remove previous FailureSummaryReport if exsists
+        $attachments = "FailureSummaryReport.csv"
+        Remove-PnPListItemAttachment -List $listName -Identity $item.Id -FileName $attachments -Force
+
+
+        # Gathers FailureSummaryReport and uploads to SPO List 
+        $filename = Join-Path -Path $migrationStatus.ReportFolderPath -ChildPath "FailureSummaryReport.csv"
+
+# Uploads Error Log
+if (Test-Path -Path $filename -PathType Leaf){
+    $itemlist = Get-PnPListItem -List $listName -Id $item.Id
+    $FileStream = New-Object IO.FileStream($filename,[System.IO.FileMode]::Open)
+    $AttachmentInfo = New-Object -TypeName Microsoft.SharePoint.CLient.AttachmentCreationInformation
+    $AttachmentInfo.FileName = Split-Path $filename -Leaf
+    $AttachmentInfo.ContentStream = $FileStream
+    $AttachedFile = $item.AttachmentFiles.Add($AttachmentInfo)
+    Invoke-PnPQuery
+    $FileStream.Close()
+
+    # If migration errors, update the 'migrate' column to 'ErrorLog'
+        $item["migrate"] = "ErrorLog"
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{"migrate" = "ErrorLog"}
+        Write-Host "*** Migration errors reported for this site, see Failure Summary Report ***" -ForegroundColor Red
+
+#<# You can disable this section if want to stop further processing if failure summary report is created
+
+# THis section can be marked out if you don't want all the AD processing and onprem permissions removed.
+# WARNING!! This portion of the script will remove permissions to local onedrive site, will update users AD properties with new OD URL, update SPO List columns for both actions
+
+    # Remove current user SCA and add new account as SCA
+    # Create new Context for modifying permissions
+    $ctx = New-Object Microsoft.SharePoint.Client.ClientContext($sourceUrl)
+    $ctx.Credentials = $OnPremCredential
+
+    # Load web object
+    $web = $ctx.Web
+    $ctx.Load($web)
+    $ctx.ExecuteQuery()
+
+    # Ensure Users
+    $newUser = $web.EnsureUser("i:0#.w|CONTOSO\svc-migration")
+    $oldUser = $web.EnsureUser("i:0#.w|CONTOSO\$user")
+    $ctx.Load($newUser)
+    $ctx.Load($oldUser)
+    $ctx.ExecuteQuery()
+
+    # Make new user a Site Collection Administrator
+    $newUser.IsSiteAdmin = $true
+    $newUser.Update()
+    $ctx.ExecuteQuery()
+
+    # Remove old user as a Site Collection Administrator
+    $oldUser.IsSiteAdmin = $false
+    $oldUser.Update()
+    $ctx.ExecuteQuery()
+
+    # Dispose of the context
+    $ctx.Dispose()
+
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user permissions from $sourceUrl" -ForegroundColor Green
+
+# Additional processing
+
+try {
+    # Update user's wwwHomePage attribute
+    Set-ADUser $user -Replace @{WWWhOMEpAGE=$targetUrl}
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully updated $user AD wwwHomePage property to $targetUrl" -ForegroundColor Green
+    
+    # Remove the user from each matching group if they are a member
+foreach ($group in $groups) {
+    $isMember = Get-ADGroupMember -Identity $group | Where-Object { $_.SamAccountName -eq $user }
+    if ($isMember) {
+        Remove-ADGroupMember -Identity $group -Members $user -Confirm:$false
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user from $($group.Name)" -ForegroundColor Green
+    } else {
+        #Write-Host "$user is not a member of $($group.Name)" -ForegroundColor Green
+    }
+}
+
+# Remove the user from the additional group if they are a member
+$isMemberAdditional = Get-ADGroupMember -Identity $additionalGroup | Where-Object { $_.SamAccountName -eq $user }
+if ($isMemberAdditional) {
+    Remove-ADGroupMember -Identity $additionalGroup -Members $user -Confirm:$false
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user from $additionalGroup" -ForegroundColor Green
+} else {
+    #Write-Host "$user is not a member of $additionalGroup" -ForegroundColor Green
+}
+
+    # Add the user to the target group
+    Add-ADGroupMember -Identity $targetGroup -Members $user
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully added $user to $targetGroup" -ForegroundColor Green
+
+    # When AD properties are updated, update the 'AD Prpoerties' column to 'Updated'
+    $item = $listItems | Where-Object { $_["Title"] -eq $user }
+    $item["wwwHomePage"] = "Updated"
+    Set-PnPListItem -List $listName -Identity $item.Id -Values @{"wwwHomePage" = "Updated"}
+
+    # When Migration process ends, update the 'OnPrem Disabled' column to 'Disabled' indicating permissions removed
+    $item = $listItems | Where-Object { $_["Title"] -eq $user }
+    $item["OnPrem_x002d_Disabled"] = "Disabled"
+    Set-PnPListItem -List $listName -Identity $item.Id -Values @{"OnPrem_x002d_Disabled" = "Disabled"}
+
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully updated $user SharePoint list properties." -ForegroundColor Green
+}
+catch [System.UnauthorizedAccessException] {
+    Write-Host"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') *** Error: You do not have permission to update this user $user in Active Directory." -ForegroundColor Red
+         
+}
+catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+    Write-Host"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') *** Error: The specified user $user could not be found." -ForegroundColor Red
+            
+}
+
+#>
+
+    #Write-Host "*** TEST ***" -ForegroundColor Green
+}
+else {
+    Write-Host "*** NO migration errors for this site ***" -ForegroundColor Green
+
+    # Loop test message
+    Write-Host "****************************** Succesful Migration *******************************************" -ForegroundColor Yellow
+
+#<#
+
+# WARNING!! This portion of the script will remove permissions to local onedrive site, will update users AD properties with new OD URL, update SPO List columns for both actions
+
+    # Remove current user SCA and add new account as SCA
+    # Create new Context for modifying permissions
+    $ctx = New-Object Microsoft.SharePoint.Client.ClientContext($sourceUrl)
+    $ctx.Credentials = $OnPremCredential
+
+    # Load web object
+    $web = $ctx.Web
+    $ctx.Load($web)
+    $ctx.ExecuteQuery()
+
+    # Ensure Users
+    $newUser = $web.EnsureUser("i:0#.w|CONTOSO\svc-migration")
+    $oldUser = $web.EnsureUser("i:0#.w|CONTOSO\$user")
+    $ctx.Load($newUser)
+    $ctx.Load($oldUser)
+    $ctx.ExecuteQuery()
+
+    # Make new user a Site Collection Administrator
+    $newUser.IsSiteAdmin = $true
+    $newUser.Update()
+    $ctx.ExecuteQuery()
+
+    # Remove old user as a Site Collection Administrator
+    $oldUser.IsSiteAdmin = $false
+    $oldUser.Update()
+    $ctx.ExecuteQuery()
+
+    # Dispose of the context
+    $ctx.Dispose()
+
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user permissions from $sourceUrl" -ForegroundColor Green
+
+# Additional processing
+
+try {
+    # Update user's wwwHomePage attribute
+    Set-ADUser $user -Replace @{WWWhOMEpAGE=$targetUrl}
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully updated $user AD wwwHomePage property to $targetUrl" -ForegroundColor Green
+    
+    # Remove the user from each matching group if they are a member
+foreach ($group in $groups) {
+    $isMember = Get-ADGroupMember -Identity $group | Where-Object { $_.SamAccountName -eq $user }
+    if ($isMember) {
+        Remove-ADGroupMember -Identity $group -Members $user -Confirm:$false
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user from $($group.Name)" -ForegroundColor Green
+    } else {
+        #Write-Host "$user is not a member of $($group.Name)" -ForegroundColor Green
+    }
+}
+
+# Remove the user from the additional group if they are a member
+$isMemberAdditional = Get-ADGroupMember -Identity $additionalGroup | Where-Object { $_.SamAccountName -eq $user }
+if ($isMemberAdditional) {
+    Remove-ADGroupMember -Identity $additionalGroup -Members $user -Confirm:$false
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully removed $user from $additionalGroup" -ForegroundColor Green
+} else {
+    #Write-Host "$user is not a member of $additionalGroup" -ForegroundColor Green
+}
+
+    # Add the user to the target group
+    Add-ADGroupMember -Identity $targetGroup -Members $user
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully added $user to $targetGroup" -ForegroundColor Green
+
+    # When AD properties are updated, update the 'AD Prpoerties' column to 'Updated'
+    $item = $listItems | Where-Object { $_["Title"] -eq $user }
+    $item["wwwHomePage"] = "Updated"
+    Set-PnPListItem -List $listName -Identity $item.Id -Values @{"wwwHomePage" = "Updated"}
+
+    # When Migration process ends, update the 'OnPrem Disabled' column to 'Disabled' indicating permissions removed
+    $item = $listItems | Where-Object { $_["Title"] -eq $user }
+    $item["OnPrem_x002d_Disabled"] = "Disabled"
+    Set-PnPListItem -List $listName -Identity $item.Id -Values @{"OnPrem_x002d_Disabled" = "Disabled"}
+
+    Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Successfully updated $user SharePoint list properties." -ForegroundColor Green
+}
+catch [System.UnauthorizedAccessException] {
+    Write-Host"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') *** Error: You do not have permission to update this user $user in Active Directory." -ForegroundColor Red
+         
+}
+catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+    Write-Host"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') *** Error: The specified user $user could not be found." -ForegroundColor Red
+            
+}
+
+#>
+    
+     }
+}
+
+    Start-Sleep -Seconds 30 #Pause for 30 seconds
+    Stop-SPMTMigration
+    Unregister-SPMTMigration
+}
+
+Stop-Transcript

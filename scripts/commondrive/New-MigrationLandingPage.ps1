@@ -1,0 +1,343 @@
+<#5/19/26b  akastatuspage
+.SYNOPSIS
+    Creates a polished SharePoint landing page with division menu buttons.
+
+.DESCRIPTION
+    Uses PnP PowerShell to create a modern SharePoint page with:
+    - Contoso-themed dark navy/gold styling with seal emblem
+    - Auto-discovers divisions from the CommonMigrationStatus list
+    - Styled tile buttons for each division view (sorted A-Z)
+    - Optional admin section
+    
+    The page provides a clean navigation experience instead of users
+    landing on the full 500+ row list.
+
+.PARAMETER PageName
+    Name of the page to create. Default: "MigrationStatus"
+
+.PARAMETER SkipAutoDiscover
+    When specified, skips auto-discovery and uses the -Divisions parameter instead.
+    By default, divisions are auto-discovered from the DIV column.
+
+.PARAMETER Divisions
+    Array of division codes. Only used if -SkipAutoDiscover is specified.
+    Automatically sorted alphabetically. Default: @("SF", "WFO", "HQ")
+
+.PARAMETER DivisionLabels
+    Hashtable mapping division codes to full names.
+    Default: @{ SF = "San Francisco"; WFO = "Washington Field"; HQ = "Headquarters" }
+
+.PARAMETER NoAdminLink
+    When specified, hides the admin link to the All Items view.
+    By default, the admin link is shown.
+
+.PARAMETER SetAsHomePage
+    Set this page as the site home page. Default: $false
+
+.EXAMPLE
+    .\CommonMigrationStatusPage.ps1
+    # Auto-discovers divisions from the list and creates the page
+
+.EXAMPLE
+    .\CommonMigrationStatusPage.ps1 -SkipAutoDiscover -Divisions @("SF","WFO","HQ")
+    # Uses manually specified divisions instead of auto-discovery
+
+.EXAMPLE
+    .\CommonMigrationStatusPage.ps1 -DivisionLabels @{SF="San Francisco";WFO="Washington Field";HQ="Headquarters"}
+    # Auto-discovers divisions and uses custom labels for display
+
+.NOTES
+    Version:     1.5.0
+    Date:        2026-03-03
+    Author:      Douglas Cox [Microsoft CSA]
+    Requires:    PnP.PowerShell module
+    Environment: USSec / IL6 (.scloud)
+    
+    Features:
+    - Auto-discovers divisions from DIV column (default behavior)
+    - Divisions are automatically sorted alphabetically
+    - Contoso-themed dark navy/gold visual styling with seal
+    - Uses Text web part with inline styles (gov-cloud compatible)
+    - Just re-run the script when new DIVs are added to the list
+#>
+
+param(
+    [string]$PageName = "MigrationStatus",
+    
+    [switch]$SkipAutoDiscover,
+    
+    [string[]]$Divisions = @("SF", "WFO", "HQ"),
+    
+    [hashtable]$DivisionLabels = @{
+        SF  = "San Francisco"
+        WFO = "Washington Field"
+        HQ  = "Headquarters"
+    },
+    
+    [switch]$NoAdminLink,
+    
+    [switch]$SetAsHomePage
+)
+
+$ErrorActionPreference = "Stop"
+
+# ============================================================
+# CONFIGURATION - Match your environment
+# ============================================================
+
+$siteUrl  = "https://contoso.spo.microsoft.scloud/sites/000001"
+$listName = "CommonMigrationStatus"
+
+# App-Only Authentication (same as other scripts)
+$UseAppAuth               = $true
+$AppClientId              = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+$AppTenantId              = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+$AppCertificateThumbprint = "1111111111111111111111111111111111111111"
+
+# ============================================================
+# CONNECT TO SHAREPOINT
+# ============================================================
+
+Write-Host "`n>> Connecting to SharePoint" -ForegroundColor Cyan
+
+try {
+    if ($UseAppAuth) {
+        Connect-PnPOnline -Url $siteUrl `
+            -ClientId $AppClientId `
+            -Tenant $AppTenantId `
+            -Thumbprint $AppCertificateThumbprint `
+            -ErrorAction Stop
+    } else {
+        Connect-PnPOnline -Url $siteUrl -UseWebLogin -ErrorAction Stop
+    }
+    Write-Host "   [OK] Connected to $siteUrl" -ForegroundColor Green
+}
+catch {
+    Write-Host "   [X] Failed to connect: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# ============================================================
+# AUTO-DISCOVER DIVISIONS FROM LIST
+# ============================================================
+
+if (-not $SkipAutoDiscover) {
+    Write-Host "`n>> Auto-discovering divisions from list" -ForegroundColor Cyan
+    
+    try {
+        # Get all items and extract unique DIV values
+        $allItems = Get-PnPListItem -List $listName -PageSize 500 -Fields "DIV" -ErrorAction Stop
+        
+        $uniqueDivs = @()
+        foreach ($item in $allItems) {
+            $divValue = $item["DIV"]
+            if (-not [string]::IsNullOrWhiteSpace($divValue)) {
+                $divStr = $divValue.ToString().Trim()
+                if ($divStr -notin $uniqueDivs) {
+                    $uniqueDivs += $divStr
+                }
+            }
+        }
+        
+        if ($uniqueDivs.Count -eq 0) {
+            Write-Host "   [!] No DIV values found in list - using default divisions" -ForegroundColor Yellow
+        }
+        else {
+            $Divisions = $uniqueDivs | Sort-Object
+            Write-Host "   [OK] Found $($Divisions.Count) divisions: $($Divisions -join ', ')" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "   [!] Auto-discover failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "   [!] Using default divisions instead" -ForegroundColor Yellow
+    }
+}
+else {
+    # Manual mode - just sort what was passed
+    $Divisions = $Divisions | Sort-Object
+    Write-Host "`n>> Using manually specified divisions: $($Divisions -join ', ')" -ForegroundColor Cyan
+}
+
+# ============================================================
+# LOOK UP ACTUAL VIEW URLs FROM SHAREPOINT
+# ============================================================
+# Views are created by Import-MigrationSources.ps1. SharePoint may sanitize
+# the .aspx filename (strip hyphens, etc.) so we cannot assume <DIV>.aspx.
+# Read the real ServerRelativeUrl for each view and use that for tile hrefs.
+
+Write-Host "`n>> Looking up view URLs" -ForegroundColor Cyan
+
+$viewUrlMap = @{}
+try {
+    $existingViews = Get-PnPView -List $listName -ErrorAction Stop
+    foreach ($v in $existingViews) {
+        if (-not [string]::IsNullOrWhiteSpace($v.Title) -and `
+            -not [string]::IsNullOrWhiteSpace($v.ServerRelativeUrl) -and `
+            -not $viewUrlMap.ContainsKey($v.Title)) {
+            $viewUrlMap[$v.Title] = $v.ServerRelativeUrl
+        }
+    }
+    Write-Host "   [OK] Mapped $($viewUrlMap.Count) view URL(s)" -ForegroundColor Green
+}
+catch {
+    Write-Host "   [!] View lookup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "   [!] Falling back to guessed <DIV>.aspx URLs" -ForegroundColor Yellow
+}
+
+# ============================================================
+# BUILD THE HTML MENU (Inline styles for NoScript compatibility)
+# ============================================================
+
+Write-Host "`n>> Building menu HTML" -ForegroundColor Cyan
+
+# Get site-relative path for proper URLs
+$sitePath = ([Uri]$siteUrl).AbsolutePath  # e.g. /sites/000001
+
+# Generate button HTML for each division with inline styles
+$buttonHtml = ""
+foreach ($div in $Divisions) {
+    $label = if ($DivisionLabels.ContainsKey($div)) { $DivisionLabels[$div] } else { $div }
+    # Prefer the real ServerRelativeUrl reported by SharePoint; fall back to
+    # the legacy <DIV>.aspx guess only if no view is mapped (e.g. lookup failed).
+    $viewUrl = if ($viewUrlMap.ContainsKey($div)) {
+        $viewUrlMap[$div]
+    } else {
+        "$sitePath/Lists/$listName/$div.aspx"
+    }
+    $buttonHtml += @"
+  <a href="$viewUrl" style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:160px;height:140px;background:linear-gradient(180deg,#1a2a4a 0%,#0f1d33 100%);color:#d4af37;text-decoration:none;border-radius:8px;border:2px solid #2a3a5a;box-shadow:0 4px 16px rgba(0,0,0,0.4);margin:12px;">
+    <span style="font-size:36px;font-weight:800;letter-spacing:2px;margin-bottom:8px;">$div</span>
+    <span style="font-size:11px;color:#8b9ab8;text-transform:uppercase;letter-spacing:1px;">$label</span>
+  </a>
+
+"@
+}
+
+# Admin button (optional)
+$adminHtml = ""
+if (-not $NoAdminLink) {
+    $allItemsUrl = "$sitePath/Lists/$listName/AllItems.aspx"
+    $adminHtml = @"
+
+<div style="text-align:center;margin-top:50px;padding-top:30px;border-top:1px solid #2a3a5a;">
+  <a href="$allItemsUrl" style="display:inline-flex;align-items:center;padding:12px 24px;background:transparent;color:#8b9ab8;text-decoration:none;border:1px solid #3a4a6a;border-radius:4px;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:1px;">
+    All Items View (Slow)
+  </a>
+</div>
+"@
+}
+
+# Full HTML with inline styles - Contoso Theme (NoScript compatible)
+$embedHtml = @"
+<div style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;padding:40px 20px;background:linear-gradient(180deg,#0a1628 0%,#1a2a4a 100%);border-radius:8px;min-height:400px;">
+  
+  <div style="text-align:center;margin-bottom:40px;">
+    <h1 style="font-size:24px;font-weight:700;color:#d4af37;margin:0 0 4px 0;text-transform:uppercase;letter-spacing:3px;">Migration Status</h1>
+    <p style="font-size:14px;color:#8b9ab8;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:2px;">Common Drive Migration Tracking</p>
+    <p style="margin:12px 0;"><a href="$sitePath/SitePages/CommonDriveITAdminQuickRefGuide.aspx" style="color:#bf9b30;text-decoration:none;font-size:13px;">&#128214; IT Quick Admin Guide</a></p>
+    <p style="font-size:13px;color:#5a6a88;margin:0;font-style:italic;">Select Division</p>
+  </div>
+  
+  <div style="width:200px;height:2px;background:linear-gradient(90deg,transparent,#d4af37,transparent);margin:20px auto 30px;"></div>
+  
+  <div style="display:flex;flex-wrap:wrap;gap:24px;justify-content:center;padding:10px;">
+$buttonHtml  </div>
+$adminHtml
+
+  <div style="text-align:center;margin-top:40px;font-size:10px;color:#4a5a78;text-transform:uppercase;letter-spacing:1px;"></div>
+</div>
+"@
+
+Write-Host "   [OK] Generated HTML with $($Divisions.Count) division buttons" -ForegroundColor Green
+
+# ============================================================
+# CREATE OR UPDATE THE PAGE
+# ============================================================
+
+Write-Host "`n>> Creating/Updating SharePoint page: $PageName" -ForegroundColor Cyan
+
+# Check if page exists
+$existingPage = Get-PnPPage -Identity $PageName -ErrorAction SilentlyContinue
+if ($existingPage) {
+    Write-Host "   [OK] Page '$PageName' exists - deleting to recreate fresh" -ForegroundColor Yellow
+    
+    # Delete the existing page (recreating avoids full-width section issues)
+    Remove-PnPPage -Identity $PageName -Force -ErrorAction SilentlyContinue
+    Write-Host "   [OK] Old page removed" -ForegroundColor Green
+    Start-Sleep -Seconds 2
+}
+
+# Create new blank page
+Add-PnPPage -Name $PageName -LayoutType Article -ErrorAction Stop
+Write-Host "   [OK] Page created" -ForegroundColor Green
+
+# Add menu section with text part (gov-cloud compatible - same as ScenarioPortal)
+Write-Host "   Adding menu section..." -ForegroundColor Gray
+Add-PnPPageSection -Page $PageName -SectionTemplate OneColumn -Order 1 | Out-Null
+Add-PnPPageTextPart -Page $PageName -Text $embedHtml -Order 1 -Section 1 -Column 1 | Out-Null
+Write-Host "   [OK] Menu added" -ForegroundColor Green
+
+# Remove the page header (no more "Mackinac Bridge" image)
+Set-PnPPage -Identity $PageName -HeaderType None | Out-Null
+
+# Publish the page
+Write-Host "   Publishing page..." -ForegroundColor Gray
+Set-PnPPage -Identity $PageName -Publish -ErrorAction Stop
+Write-Host "   [OK] Page published" -ForegroundColor Green
+
+# Set as home page if requested
+if ($SetAsHomePage) {
+    Write-Host "   Setting as site home page..." -ForegroundColor Gray
+    Set-PnPHomePage -RootFolderRelativeUrl "SitePages/$PageName.aspx" -ErrorAction Stop
+    Write-Host "   [OK] Set as home page" -ForegroundColor Green
+}
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+$pageUrl = "$siteUrl/SitePages/$PageName.aspx"
+
+Write-Host "`n============================================================" -ForegroundColor Cyan
+Write-Host "LANDING PAGE READY" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "Page URL:   $pageUrl" -ForegroundColor White
+Write-Host "Divisions:  $($Divisions -join ', ')" -ForegroundColor White
+Write-Host "Admin Link: $(-not $NoAdminLink)" -ForegroundColor White
+Write-Host "============================================================" -ForegroundColor Cyan
+
+Write-Host "`nNext steps:" -ForegroundColor Yellow
+Write-Host "  1. Visit the page: $pageUrl" -ForegroundColor Gray
+Write-Host "  2. Add to site navigation (Site Settings > Navigation)" -ForegroundColor Gray
+if (-not $SetAsHomePage) {
+    Write-Host "  3. Optionally re-run with -SetAsHomePage to make it the default" -ForegroundColor Gray
+}
+
+# ============================================================
+# ENSURE NAVIGATION LINK EXISTS
+# ============================================================
+$navLinkTitle = "CommonDrive Migrations"
+$navLinkUrl = "$siteUrl/SitePages/$PageName.aspx"
+
+Write-Host "`n>> Adding navigation link..." -ForegroundColor Cyan
+
+try {
+    # Check if link already exists in QuickLaunch (works for this site's top nav)
+    $existingNav = Get-PnPNavigationNode -Location QuickLaunch -ErrorAction SilentlyContinue
+    $existingLink = $existingNav | Where-Object { $_.Title -eq $navLinkTitle }
+    
+    if ($existingLink) {
+        Write-Host "   [OK] Navigation link '$navLinkTitle' already exists" -ForegroundColor Green
+    } else {
+        # Add to QuickLaunch (appears in top nav on this site)
+        Write-Host "   Adding '$navLinkTitle' to QuickLaunch..." -ForegroundColor Gray
+        $newNode = Add-PnPNavigationNode -Location QuickLaunch -Title $navLinkTitle -Url $navLinkUrl -ErrorAction Stop
+        Write-Host "   [OK] Added '$navLinkTitle' to navigation (ID: $($newNode.Id))" -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "   [!] Failed to add navigation: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "   [!] Manually add '$navLinkTitle' -> $navLinkUrl" -ForegroundColor Yellow
+}
+
+Disconnect-PnPOnline -ErrorAction SilentlyContinue

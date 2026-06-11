@@ -1,0 +1,1075 @@
+<# 04/09/26b
+.SYNOPSIS
+    Combined pre-migration helper: Resolves Team/Channel names to URLs AND grants permissions.
+    Auto-provisions Teams channel folders that haven't been initialized.
+    Phase 1: APP-ONLY Graph + APP-ONLY SPO Admin (grants SCA + M365 Group Owner, then provisions)
+    Phase 2: APP-ONLY SPO Admin for storage check + service account permissions
+
+.DESCRIPTION
+    This script combines two helper functions into a single efficient pass:
+    
+    PHASE 1 - Team/Channel Resolution (APP-ONLY GRAPH + Interactive SPO):
+        - App-only auth: Finds Teams/Channels by name (sees ALL Teams in tenant)
+        - Gets Team's SPO site URL via /groups/{id}/sites/root
+        - Grants SCA permissions to service account (via SPO Admin)
+        - Grants M365 Group Owner to service account (enables folder provisioning)
+        - App-only auth: Provisions channel folders (filesFolder API triggers creation)
+        - Updates: TargetUrl, TargetRelativePath, TeamChannelError
+    
+    PHASE 2 - Storage & Permissions (AUTOMATED - app-only, can be scheduled):
+        - Uses certificate-based app-only authentication
+        - Finds items with TargetUrl populated but LastChecked is blank
+        - Gets storage quota/used from SPO Admin API
+        - Grants migration service account Site Collection Admin rights
+        - Updates: StorageQuota, StorageUsed, StorageAvailable, LastChecked
+    
+    WORKFLOW:
+        1. Run Phase 1 manually when you have new Teams targets to resolve
+        2. Schedule Phase 2 to run automatically (no MFA needed)
+        3. CommonDriveMigration picks up items with TargetURL populated
+
+.PARAMETER AutoRun
+    Runs without interactive prompts. Can be used with any phase for scheduled tasks.
+    All phases now support app-only authentication.
+
+.PARAMETER MaxItems
+    Maximum items to process per phase. Default: 50.
+
+.PARAMETER Phase1Only
+    Only run Phase 1 (Team/Channel resolution). Requires interactive login.
+
+.PARAMETER Phase2Only
+    Only run Phase 2 (Storage/Permissions). Can be scheduled with -AutoRun.
+
+.PARAMETER AppClientIdParam
+    Override the App Client ID at runtime for Phase 2 app-only auth.
+
+.PARAMETER AppCertThumbprintParam
+    Override the certificate thumbprint at runtime for Phase 2 app-only auth.
+
+.EXAMPLE
+    .\Update-MigrationTargets.ps1
+    # Interactive mode - runs both phases (will prompt for MFA login)
+
+.EXAMPLE
+    .\Update-MigrationTargets.ps1 -Phase1Only
+    # Interactive - resolve Team/Channel URLs only (login required)
+
+.EXAMPLE
+    .\Update-MigrationTargets.ps1 -AutoRun
+    # Automated - runs both phases unattended (scheduled task)
+
+.EXAMPLE
+    # Scheduled Task setup (both phases - run every hour):
+    #   Program:   powershell.exe
+    #   Arguments: -NoProfile -ExecutionPolicy Bypass -File "F:\Scripts\Update-MigrationTargets.ps1" -AutoRun
+    #   Run as:    Service account (no MFA needed - fully app-only)
+
+.NOTES
+    Version:     1.8.1
+    Date:        2026-04-07
+    Author:      Douglas Cox [Microsoft CSA]
+    Environment: USSec / IL6 (.scloud)
+    
+    Authentication Model:
+      - Phase 1 Graph: App-only (certificate) - can see ALL Teams, add Group Owners
+      - Phase 1 SPO Admin: App-only (certificate) - grant SCA permissions
+      - Phase 2: App-only (certificate) - storage check, can be scheduled
+      - ALL PHASES can now run unattended with -AutoRun
+    
+    Channel Folder Provisioning:
+      - Teams channel folders aren't created until first Files tab access
+      - Service account must be M365 Group OWNER to trigger provisioning via app-only
+      - USSec/IL6 provisioning can take 2-3 minutes (5 retries x 30s delay)
+      - App grants: Group.ReadWrite.All, User.Read.All (to add owner)
+    
+    Requires:
+      - PnP.PowerShell module
+      - Microsoft.Graph.Authentication module
+      - Microsoft.Graph.Teams module
+    
+    App Registration Permissions Required:
+      Microsoft Graph (Application - for lookups AND provisioning):
+        - Team.ReadBasic.All        : List/search ALL Teams by name
+        - Channel.ReadBasic.All     : List channels in ALL Teams
+        - Sites.Read.All            : Get Team's SPO site URL
+        - Group.ReadWrite.All       : Add service account as M365 Group Owner
+        - User.Read.All             : Resolve service account UPN to ID
+      
+      Microsoft Graph (Delegated - OPTIONAL fallback, admin consent required):
+        - Team.ReadBasic.All        : Access teams
+        - TeamSettings.Read.All     : Read team settings
+        - TeamSettings.ReadWrite.All: Trigger folder provisioning (if app-only fails)
+      
+      SharePoint (Application):
+        - Sites.FullControl.All     : Update SPO list, grant SCA permissions
+
+.LINK
+    Related: CommonDriveMigration_v1.ps1
+#>
+
+param(
+    [switch]$AutoRun,
+    [int]$MaxItems = 50,
+    [switch]$Phase1Only,
+    [switch]$Phase2Only,
+    
+    # Runtime overrides for multi-instance scheduled tasks (pass either or both)
+    [Parameter(Mandatory=$false)]
+    [string]$AppClientIdParam = "",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AppCertThumbprintParam = ""
+)
+
+$scriptVersion = "1.8.2"
+$ErrorActionPreference = "Continue"
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+$siteUrl   = "https://contoso.spo.microsoft.scloud/sites/000001"
+$adminUrl  = "https://contoso-admin.spo.microsoft.scloud/"
+$listName  = "CommonMigrationStatus"
+
+# App-Only Authentication (Phase 2 only - for SPO Admin operations)
+# Phase 1 uses interactive delegated auth (browser login with MFA)
+$AppClientId              = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"   # App with SPO permissions
+$AppTenantId              = "dddddddd-dddd-dddd-dddd-dddddddddddd"   # Tenant ID
+$AppCertificateThumbprint = "2222222222222222222222222222222222222222"  # Certificate thumbprint
+
+# Graph Environment Settings (USSec)
+$GraphEnvironment = "USSec"
+$GraphEndpoint = "https://graph.microsoft.scloud"
+
+# Migration Service Account - will be granted Site Collection Admin on each target site
+# This pre-grants permissions so CommonDriveMigration doesn't wait for propagation
+$MigrationServiceAccount  = "svc-migration@contoso.gov"
+
+# Logging
+$LogFolder = "F:\MigrationTargets"
+if (-not (Test-Path $LogFolder)) { New-Item -Path $LogFolder -ItemType Directory -Force | Out-Null }
+
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$TranscriptPath = Join-Path $LogFolder "Update-MigrationTargets_$timestamp.log"
+
+# Throttling settings
+$MaxRetries = 5
+$BaseWaitSeconds = 30
+
+# Server number for ClaimedBy tracking (DC.Server format: 1.1, 1.2, 1.3, 2.1, 2.2, 2.3)
+# Derived from server name pattern: hqdX-sdass-20Y
+$ServerNumber = "$($env:COMPUTERNAME[3]).$($env:COMPUTERNAME[-1])"
+
+# Apply runtime parameter overrides if provided (must be after config block)
+if ($AppClientIdParam -and $AppClientIdParam.Trim() -ne "") {
+    Write-Host "Using runtime App Client ID override: $AppClientIdParam" -ForegroundColor Yellow
+    $AppClientId = $AppClientIdParam
+}
+if ($AppCertThumbprintParam -and $AppCertThumbprintParam.Trim() -ne "") {
+    Write-Host "Using runtime certificate thumbprint override: $AppCertThumbprintParam" -ForegroundColor Yellow
+    $AppCertificateThumbprint = $AppCertThumbprintParam
+}
+
+# ============================================================
+# HELPER FUNCTIONS (Shared)
+# ============================================================
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [ValidateSet("INFO", "WARN", "ERROR", "SUCCESS")]
+        [string]$Level = "INFO"
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $color = switch ($Level) {
+        "ERROR"   { "Red" }
+        "WARN"    { "Yellow" }
+        "SUCCESS" { "Green" }
+        default   { "White" }
+    }
+    Write-Host "[$timestamp][$Level] $Message" -ForegroundColor $color
+}
+
+function Test-IsThrottled {
+    param($Exception)
+    
+    $msg = $Exception.Message
+    # Only retry on actual throttling errors, not permission or other errors
+    if ($msg -match "429|throttled|503|too many requests|rate limit") {
+        return $true
+    }
+    return $false
+}
+
+function Invoke-WithThrottleRetry {
+    param(
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$ScriptBlock,
+        [string]$OperationName = "Operation",
+        [int]$MaxRetries = $script:MaxRetries,
+        [int]$BaseWaitSeconds = $script:BaseWaitSeconds
+    )
+    
+    $attempt = 0
+    while ($true) {
+        try {
+            $attempt++
+            return & $ScriptBlock
+        }
+        catch {
+            $errorMsg = $_.Exception.Message
+            if ((Test-IsThrottled $_.Exception) -and $attempt -lt $MaxRetries) {
+                $waitTime = $BaseWaitSeconds * [Math]::Pow(2, $attempt - 1)
+                Write-Log "$OperationName - Throttled, retry $attempt/$MaxRetries in ${waitTime}s..." "WARN"
+                Start-Sleep -Seconds $waitTime
+            }
+            else {
+                throw $_
+            }
+        }
+    }
+}
+
+# ============================================================
+# GRAPH API FUNCTIONS (Phase 1 - Hybrid: App-only lookups + Delegated provisioning)
+# ============================================================
+
+function Connect-ToGraphAppOnly {
+    <#
+    .SYNOPSIS
+        Connects to Microsoft Graph with app-only (certificate) authentication for USSec.
+        Used for Team/Channel lookups - can see ALL Teams.
+    #>
+    
+    Write-Log "Connecting to Microsoft Graph ($GraphEnvironment) - App-Only for lookups..."
+    
+    try {
+        # Import Graph modules
+        $requiredModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Teams")
+        foreach ($mod in $requiredModules) {
+            if (-not (Get-Module -Name $mod -ErrorAction SilentlyContinue)) {
+                Import-Module $mod -ErrorAction Stop
+            }
+        }
+        
+        # Get certificate
+        $cert = Get-ChildItem -Path "Cert:\LocalMachine\My" | 
+                Where-Object { $_.Thumbprint -eq $AppCertificateThumbprint } |
+                Select-Object -First 1
+        
+        if (-not $cert) {
+            $cert = Get-ChildItem -Path "Cert:\CurrentUser\My" | 
+                    Where-Object { $_.Thumbprint -eq $AppCertificateThumbprint } |
+                    Select-Object -First 1
+        }
+        
+        if (-not $cert) {
+            throw "Certificate with thumbprint $AppCertificateThumbprint not found"
+        }
+        
+        # Register USSec environment if needed
+        $existingEnv = Get-MgEnvironment -Name "USSec" -ErrorAction SilentlyContinue
+        if (-not $existingEnv) {
+            Add-MgEnvironment -Name "USSec" `
+                -AzureADEndpoint "https://login.microsoftonline.microsoft.scloud" `
+                -GraphEndpoint $GraphEndpoint `
+                -ErrorAction SilentlyContinue | Out-Null
+        }
+        
+        # Connect with certificate (app-only)
+        Connect-MgGraph -Environment $GraphEnvironment `
+            -ClientId $AppClientId `
+            -TenantId $AppTenantId `
+            -Certificate $cert `
+            -ErrorAction Stop
+        
+        # Verify connection
+        $context = Get-MgContext
+        if ($context) {
+            Write-Log "Connected to Microsoft Graph (App-Only) - ClientId: $($context.ClientId)" "SUCCESS"
+            
+            # Test API access - verify we can read groups
+            try {
+                $testResponse = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/groups?`$top=1&`$select=id,displayName" -ErrorAction Stop
+                Write-Host "    Graph API test: Can read groups" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "    Graph API test FAILED: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "    Verify app has Group.Read.All or Team.ReadBasic.All permission" -ForegroundColor Yellow
+            }
+            
+            return $true
+        }
+        else {
+            throw "Connection succeeded but no context available"
+        }
+    }
+    catch {
+        Write-Log "Failed to connect to Graph (App-Only): $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+# Connect-ToGraphInteractive restored in v1.6.0 for auto-provisioning
+function Connect-ToGraphInteractive {
+    <#
+    .SYNOPSIS
+        Connects to Microsoft Graph with interactive delegated authentication for USSec.
+        Opens browser for login - supports MFA.
+        Used for folder provisioning (requires user context to trigger creation).
+    #>
+    
+    Write-Log "Connecting to Microsoft Graph ($GraphEnvironment) - Delegated for provisioning..."
+    Write-Host ""
+    Write-Host "  A browser window will open for authentication." -ForegroundColor Yellow
+    Write-Host "  Please sign in with an account that has Teams access." -ForegroundColor Yellow
+    Write-Host ""
+    
+    try {
+        # Import Graph modules
+        $requiredModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Teams")
+        foreach ($mod in $requiredModules) {
+            if (-not (Get-Module -Name $mod -ErrorAction SilentlyContinue)) {
+                Import-Module $mod -ErrorAction Stop
+            }
+        }
+        
+        # Register USSec environment if needed
+        $existingEnv = Get-MgEnvironment -Name "USSec" -ErrorAction SilentlyContinue
+        if (-not $existingEnv) {
+            Add-MgEnvironment -Name "USSec" `
+                -AzureADEndpoint "https://login.microsoftonline.microsoft.scloud" `
+                -GraphEndpoint $GraphEndpoint `
+                -ErrorAction SilentlyContinue | Out-Null
+        }
+        
+        # Connect with delegated auth using AppId and scopes (USSec pattern - matches working script)
+        Connect-MgGraph -Environment $GraphEnvironment `
+            -TenantId $AppTenantId `
+            -AppId $AppClientId `
+            -Scopes "Team.ReadBasic.All, TeamSettings.Read.All, TeamSettings.ReadWrite.All" `
+            -ErrorAction Stop
+        
+        # Verify connection
+        $context = Get-MgContext
+        if ($context) {
+            Write-Log "Connected to Microsoft Graph as: $($context.Account)" "SUCCESS"
+            return $true
+        }
+        else {
+            throw "Connection succeeded but no context available"
+        }
+    }
+    catch {
+        Write-Log "Failed to connect to Graph (Delegated): $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+function Find-TeamByName {
+    <#
+    .SYNOPSIS
+        Finds a Microsoft Team by display name.
+        Uses direct Graph API calls for better USSec/app-only compatibility.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TeamName
+    )
+    
+    try {
+        Write-Host "    Searching for Team: '$TeamName'" -ForegroundColor Gray
+        
+        # Escape special characters for OData filter
+        $escapedName = $TeamName.Replace("'", "''")  # OData string escape
+        
+        # Method 1: Try /teams endpoint with filter (works with some app permissions)
+        try {
+            $filter = "displayName eq '$escapedName'"
+            $encodedFilter = [System.Uri]::EscapeDataString($filter)
+            $uri = "/v1.0/teams?`$filter=$encodedFilter"
+            
+            $response = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+            
+            if ($response.value -and $response.value.Count -gt 0) {
+                Write-Host "    Found via /teams endpoint" -ForegroundColor Green
+                return $response.value | Select-Object -First 1
+            }
+        }
+        catch {
+            Write-Host "    /teams filter failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+        # Method 2: Search via /groups endpoint (M365 Groups with Team)
+        # More reliable with app-only auth
+        try {
+            $filter = "displayName eq '$escapedName' and resourceProvisioningOptions/Any(x:x eq 'Team')"
+            $encodedFilter = [System.Uri]::EscapeDataString($filter)
+            $uri = "/v1.0/groups?`$filter=$encodedFilter"
+            
+            $response = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+            
+            if ($response.value -and $response.value.Count -gt 0) {
+                Write-Host "    Found via /groups endpoint" -ForegroundColor Green
+                # Return group info - ID is the same as Team ID
+                return $response.value | Select-Object -First 1
+            }
+        }
+        catch {
+            Write-Host "    /groups filter failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+        # Method 3: List all teams and filter locally (slow but works)
+        Write-Host "    Trying full team list (slower)..." -ForegroundColor Yellow
+        try {
+            $allTeams = @()
+            $uri = "/v1.0/groups?`$filter=resourceProvisioningOptions/Any(x:x eq 'Team')&`$select=id,displayName&`$top=999"
+            
+            do {
+                $response = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+                if ($response.value) {
+                    $allTeams += $response.value
+                }
+                $uri = $response.'@odata.nextLink'
+            } while ($uri)
+            
+            Write-Host "    Retrieved $($allTeams.Count) teams" -ForegroundColor Gray
+            
+            # Find exact match (case-insensitive)
+            $match = $allTeams | Where-Object { $_.displayName -ieq $TeamName } | Select-Object -First 1
+            if ($match) {
+                Write-Host "    Found: $($match.displayName)" -ForegroundColor Green
+                return $match
+            }
+            
+            # Try partial match
+            $partialMatch = $allTeams | Where-Object { $_.displayName -ilike "*$TeamName*" } | Select-Object -First 1
+            if ($partialMatch) {
+                Write-Host "    Found partial match: $($partialMatch.displayName)" -ForegroundColor Yellow
+                return $partialMatch
+            }
+        }
+        catch {
+            Write-Host "    Full list failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        
+        Write-Host "    Team not found: '$TeamName'" -ForegroundColor Red
+        return $null
+    }
+    catch {
+        Write-Log "Error finding team '$TeamName': $($_.Exception.Message)" "ERROR"
+        return $null
+    }
+}
+
+function Find-ChannelByName {
+    <#
+    .SYNOPSIS
+        Finds a channel in a Team by display name.
+        Uses direct Graph API calls for better USSec/app-only compatibility.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TeamId,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ChannelName
+    )
+    
+    try {
+        Write-Host "    Searching for Channel: '$ChannelName'" -ForegroundColor Gray
+        
+        # Use direct Graph API call
+        $uri = "/v1.0/teams/$TeamId/channels"
+        $response = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        
+        if ($response.value -and $response.value.Count -gt 0) {
+            # Exact match first
+            $channel = $response.value | Where-Object { $_.displayName -eq $ChannelName } | Select-Object -First 1
+            if ($channel) {
+                Write-Host "    Found channel: $($channel.displayName)" -ForegroundColor Green
+                return $channel
+            }
+            
+            # Case-insensitive match
+            $channel = $response.value | Where-Object { $_.displayName -ieq $ChannelName } | Select-Object -First 1
+            if ($channel) {
+                Write-Host "    Found channel (case-insensitive): $($channel.displayName)" -ForegroundColor Green
+                return $channel
+            }
+            
+            # Show available channels for debugging
+            Write-Host "    Available channels:" -ForegroundColor Yellow
+            $response.value | ForEach-Object { Write-Host "      - $($_.displayName)" -ForegroundColor Gray }
+        }
+        
+        Write-Host "    Channel not found: '$ChannelName'" -ForegroundColor Red
+        return $null
+    }
+    catch {
+        Write-Log "Error finding channel '$ChannelName' in team: $($_.Exception.Message)" "ERROR"
+        return $null
+    }
+}
+
+function Get-TeamSiteUrl {
+    <#
+    .SYNOPSIS
+        Gets the SharePoint site URL for a Team using the M365 Group endpoint.
+        This works even if channel folders are not yet provisioned.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TeamId
+    )
+    
+    try {
+        # Team ID = M365 Group ID, so we can get the site from the groups endpoint
+        $siteResponse = Invoke-WithThrottleRetry -OperationName "Get-TeamSite" -ScriptBlock {
+            Invoke-MgGraphRequest -Method GET -Uri "/v1.0/groups/$TeamId/sites/root" -ErrorAction Stop
+        }
+        
+        if ($siteResponse -and $siteResponse.webUrl) {
+            return $siteResponse.webUrl
+        }
+        return $null
+    }
+    catch {
+        Write-Log "Error getting team site URL: $($_.Exception.Message)" "ERROR"
+        return $null
+    }
+}
+
+function Get-ChannelFilesFolder {
+    <#
+    .SYNOPSIS
+        Gets the SharePoint files folder URL for a Teams channel.
+        With delegated auth, calling this on an unprovisioned folder TRIGGERS provisioning.
+        USSec/IL6 provisioning can take 2-3 minutes.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TeamId,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ChannelId,
+        
+        [Parameter(Mandatory=$false)]
+        [int]$MaxProvisionRetries = 5,
+        
+        [Parameter(Mandatory=$false)]
+        [int]$RetryDelaySeconds = 30
+    )
+    
+    $attempt = 0
+    $provisioningTriggered = $false
+    
+    while ($attempt -lt $MaxProvisionRetries) {
+        $attempt++
+        
+        try {
+            $filesFolder = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/teams/$TeamId/channels/$ChannelId/filesFolder" -ErrorAction Stop
+            
+            if ($filesFolder -and $filesFolder.webUrl) {
+                $webUrl = $filesFolder.webUrl
+                
+                # Extract site URL
+                if ($webUrl -match "^(https://[^/]+/sites/[^/]+)") {
+                    $siteUrl = $Matches[1]
+                }
+                elseif ($webUrl -match "^(https://[^/]+/teams/[^/]+)") {
+                    $siteUrl = $Matches[1]
+                }
+                else {
+                    $siteUrl = $webUrl -replace "/Shared.*$", ""
+                }
+                
+                $folderName = $filesFolder.name
+                
+                return @{
+                    Success = $true
+                    SiteUrl = $siteUrl
+                    FolderName = $folderName
+                    FullWebUrl = $webUrl
+                }
+            }
+        }
+        catch {
+            $errorMsg = $_.Exception.Message
+            
+            # Check if this is a "folder not ready" error (needs provisioning)
+            if ($errorMsg -match "not ready|not found|404|NotFound|ItemNotFound") {
+                if (-not $provisioningTriggered) {
+                    Write-Log "Channel folder not provisioned. Triggering provisioning (attempt $attempt/$MaxProvisionRetries)..." "WARN"
+                    $provisioningTriggered = $true
+                }
+                else {
+                    Write-Log "Waiting for folder provisioning (attempt $attempt/$MaxProvisionRetries) - waiting ${RetryDelaySeconds}s..." "WARN"
+                }
+                
+                # Wait before retry - provisioning can take 30-180 seconds in USSec
+                Start-Sleep -Seconds $RetryDelaySeconds
+                continue
+            }
+            elseif (Test-IsThrottled $_) {
+                Write-Log "Throttled while getting files folder, waiting..." "WARN"
+                Start-Sleep -Seconds 30
+                continue
+            }
+            else {
+                return @{
+                    Success = $false
+                    ErrorMessage = $errorMsg
+                }
+            }
+        }
+    }
+    
+    return @{
+        Success = $false
+        ErrorMessage = "Failed to provision channel folder after $MaxProvisionRetries attempts (~$($MaxProvisionRetries * $RetryDelaySeconds)s total)"
+    }
+}
+
+function Add-TeamGroupOwner {
+    <#
+    .SYNOPSIS
+        Adds the migration service account as an M365 Group Owner.
+        This is REQUIRED for filesFolder provisioning to work with app-only auth.
+        Requires: Group.ReadWrite.All and User.Read.All (Application)
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TeamId,  # Team ID = M365 Group ID
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ServiceAccountUPN
+    )
+    
+    try {
+        # First, get the user's ID from their UPN
+        Write-Host "    Looking up service account ID..." -ForegroundColor Gray
+        $userResponse = Invoke-WithThrottleRetry -OperationName "Get-User" -ScriptBlock {
+            Invoke-MgGraphRequest -Method GET -Uri "/v1.0/users/$ServiceAccountUPN" -ErrorAction Stop
+        }
+        
+        if (-not $userResponse -or -not $userResponse.id) {
+            throw "Could not find user: $ServiceAccountUPN"
+        }
+        
+        $userId = $userResponse.id
+        Write-Host "    Service account ID: $userId" -ForegroundColor Gray
+        
+        # Check if already an owner
+        $owners = Invoke-WithThrottleRetry -OperationName "Get-GroupOwners" -ScriptBlock {
+            Invoke-MgGraphRequest -Method GET -Uri "/v1.0/groups/$TeamId/owners" -ErrorAction Stop
+        }
+        
+        $existingOwner = $owners.value | Where-Object { $_.id -eq $userId }
+        if ($existingOwner) {
+            Write-Host "    [OK] Service account already M365 Group Owner" -ForegroundColor Green
+            return $true
+        }
+        
+        # Add as owner
+        $body = @{
+            "@odata.id" = "$GraphEndpoint/v1.0/users/$userId"
+        }
+        
+        Invoke-WithThrottleRetry -OperationName "Add-GroupOwner" -ScriptBlock {
+            Invoke-MgGraphRequest -Method POST -Uri "/v1.0/groups/$TeamId/owners/`$ref" -Body $body -ErrorAction Stop
+        }
+        
+        Write-Host "    [OK] Added service account as M365 Group Owner" -ForegroundColor Green
+        
+        # Brief delay for propagation
+        Start-Sleep -Seconds 3
+        
+        return $true
+    }
+    catch {
+        $errorMsg = $_.Exception.Message
+        if ($errorMsg -like "*already exist*" -or $errorMsg -like "*added*") {
+            Write-Host "    [OK] Service account already M365 Group Owner" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "    [WARN] Could not add Group Owner: $errorMsg" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# ============================================================
+# SPO ADMIN FUNCTIONS (Phase 2)
+# ============================================================
+
+function Grant-SitePermission {
+    <#
+    .SYNOPSIS
+        Grants the migration service account Site Collection Admin rights on a target site.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$TargetSiteUrl,
+        
+        [Parameter(Mandatory=$true)]
+        $AdminConnection
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($MigrationServiceAccount)) {
+        Write-Host "      [SKIP] No MigrationServiceAccount configured" -ForegroundColor Gray
+        return $true
+    }
+    
+    try {
+        Invoke-WithThrottleRetry -OperationName "Grant-SitePermission" -ScriptBlock {
+            Set-PnPTenantSite -Url $TargetSiteUrl -Owners $MigrationServiceAccount -Connection $AdminConnection -ErrorAction Stop
+        }
+        Write-Host "      [OK] Granted SCA to '$MigrationServiceAccount'" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        if ($_.Exception.Message -like "*already*" -or $_.Exception.Message -like "*exists*") {
+            Write-Host "      [OK] '$MigrationServiceAccount' already has permissions" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "      [WARN] Permission grant: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# ============================================================
+# MAIN SCRIPT
+# ============================================================
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "  Update-MigrationTargets v$scriptVersion" -ForegroundColor Cyan
+Write-Host "  Phase 1: Team/Channel Resolution (APP-ONLY Graph + SPO Admin)" -ForegroundColor Cyan
+Write-Host "  Phase 2: Storage & Permissions (APP-ONLY SPO Admin)" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Validate parameters - removed Phase2Only requirement for AutoRun (all phases now app-only)
+# No validation needed - any combination works now
+
+Start-Transcript -Path $TranscriptPath -Append
+
+# Track stats across both phases
+$stats = @{
+    Phase1_TeamChannelsResolved = 0
+    Phase1_Errors = 0
+    Phase2_SitesChecked = 0
+    Phase2_PermissionsGranted = 0
+    Phase2_Errors = 0
+}
+
+try {
+    # ============================================================
+    # ESTABLISH PnP CONNECTION (Phase 1: interactive, Phase 2: app-only)
+    # ============================================================
+    
+    Write-Log "Establishing PnP connection to tracking site..."
+    
+    # Always use app-only auth now (both phases support it)
+    $siteConnection = Connect-PnPOnline -Url $siteUrl -ClientId $AppClientId -Thumbprint $AppCertificateThumbprint -Tenant $AppTenantId -ErrorAction Stop -ReturnConnection
+    Write-Log "Connected to $siteUrl" "SUCCESS"
+    
+    # ============================================================
+    # PHASE 1: Team/Channel Resolution (via Microsoft Graph - APP-ONLY)
+    # App-only for lookups + provisioning (service account granted Group Owner)
+    # ============================================================
+    
+    if (-not $Phase2Only) {
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Yellow
+        Write-Host "  PHASE 1: Team/Channel Resolution" -ForegroundColor Yellow
+        Write-Host "  - App-only Graph: Team/Channel lookups + provisioning" -ForegroundColor Yellow
+        Write-Host "  - App-only SPO Admin: Grants SCA + M365 Group Owner" -ForegroundColor Yellow
+        Write-Host "============================================================" -ForegroundColor Yellow
+        
+        # Connect to Graph with app-only auth for lookups
+        if (-not (Connect-ToGraphAppOnly)) {
+            Write-Log "Skipping Phase 1 - Graph connection failed" "WARN"
+        }
+        else {
+            # Get items needing lookup: TeamName populated, TargetURL empty
+            Write-Log "Querying for items with TeamName but no TargetUrl..."
+            
+            $allItems = Invoke-WithThrottleRetry -OperationName "Get-PnPListItem" -ScriptBlock {
+                Get-PnPListItem -List $listName -PageSize 500 -Connection $siteConnection
+            }
+            
+            $phase1Items = $allItems | Where-Object {
+                $teamName = $_["TeamName"]
+                $targetUrl = $_["TargetURL"]
+                (-not [string]::IsNullOrWhiteSpace($teamName)) -and [string]::IsNullOrWhiteSpace($targetUrl)
+            }
+            
+            $phase1Count = @($phase1Items).Count
+            Write-Log "Found $phase1Count items needing Team/Channel lookup"
+            
+            if ($phase1Count -gt 0) {
+                if ($phase1Count -gt $MaxItems) {
+                    Write-Log "Limiting to $MaxItems items this run"
+                    $phase1Items = $phase1Items | Select-Object -First $MaxItems
+                }
+                
+                $confirm = "Y"  # Default to yes
+                if (-not $AutoRun) {
+                    $confirm = Read-Host "Process $(@($phase1Items).Count) Team/Channel lookups? (Y/N)"
+                }
+                if ($confirm -ne "Y" -and $confirm -ne "y") {
+                    Write-Log "User skipped Phase 1"
+                    $phase1Items = @()
+                }
+                
+                # Initialize admin connection variable (will connect on-demand)
+                $phase1AdminConnection = $null
+                
+                $current = 0
+                foreach ($item in $phase1Items) {
+                    $current++
+                    $teamName = $item["TeamName"].ToString().Trim()
+                    $channelName = if ($item["TeamChannel0"]) { $item["TeamChannel0"].ToString().Trim() } else { "General" }
+                    
+                    Write-Host ""
+                    Write-Host "[$current/$(@($phase1Items).Count)] $teamName / $channelName" -ForegroundColor Cyan
+                    
+                    try {
+                        # Find Team (using app-only - can see all Teams)
+                        $team = Find-TeamByName -TeamName $teamName
+                        if (-not $team) { throw "Team not found: '$teamName'" }
+                        
+                        Write-Host "  Team: $($team.DisplayName)" -ForegroundColor Green
+                        
+                        # Find Channel (using app-only - can see all channels)
+                        $channel = Find-ChannelByName -TeamId $team.Id -ChannelName $channelName
+                        if (-not $channel) { throw "Channel not found: '$channelName'" }
+                        
+                        Write-Host "  Channel: $($channel.DisplayName)" -ForegroundColor Green
+                        
+                        # Get Team's SPO site URL FIRST (works even if channel folder not provisioned)
+                        $teamSiteUrl = Get-TeamSiteUrl -TeamId $team.Id
+                        if (-not $teamSiteUrl) { throw "Could not get Team's SharePoint site URL" }
+                        
+                        Write-Host "  Team Site: $teamSiteUrl" -ForegroundColor Gray
+                        
+                        # Pre-grant permissions to the team site (enables folder provisioning)
+                        # Connect to admin if not already done for this batch (app-only)
+                        if (-not $phase1AdminConnection) {
+                            Write-Log "Connecting to SPO Admin (App-Only) for pre-grant permissions..."
+                            $script:phase1AdminConnection = Connect-PnPOnline -Url $adminUrl -ClientId $AppClientId -Thumbprint $AppCertificateThumbprint -Tenant $AppTenantId -ErrorAction Stop -ReturnConnection
+                        }
+                        
+                        # Grant service account permissions
+                        if (Grant-SitePermission -TargetSiteUrl $teamSiteUrl -AdminConnection $phase1AdminConnection) {
+                            Write-Host "  Granted SCA permissions" -ForegroundColor Gray
+                        }
+                        
+                        # Grant service account M365 Group Owner (for future filesFolder provisioning if needed)
+                        if (Add-TeamGroupOwner -TeamId $team.Id -ServiceAccountUPN $MigrationServiceAccount) {
+                            Write-Host "  Granted M365 Group Owner" -ForegroundColor Gray
+                        }
+                        
+                        # PROVISIONING DISABLED - USSec Graph filesFolder API not triggering provisioning
+                        # Channel folder name comes from TeamChannel0 column (already populated)
+                        # SPMT should auto-create the folder during migration
+                        <#
+                        $filesFolder = Get-ChannelFilesFolder -TeamId $team.Id -ChannelId $channel.Id
+                        if ($filesFolder.Success) {
+                            # Use provisioned folder info
+                        }
+                        #>
+                        
+                        # Save team site URL and channel name for SPMT
+                        Write-Host "  TargetUrl: $teamSiteUrl" -ForegroundColor Green
+                        Write-Host "  TargetRelativePath: $channelName" -ForegroundColor Green
+                        
+                        Invoke-WithThrottleRetry -OperationName "Set-PnPListItem" -ScriptBlock {
+                            Set-PnPListItem -List $listName -Identity $item.Id -Connection $siteConnection -Values @{
+                                "TargetURL" = $teamSiteUrl
+                                "TargetRelativePath" = $channelName
+                                "TeamChannelError" = ""
+                            } | Out-Null
+                        }
+                        
+                        $stats.Phase1_TeamChannelsResolved++
+                    }
+                    catch {
+                        Write-Log "Failed: $($_.Exception.Message)" "ERROR"
+                        
+                        try {
+                            Set-PnPListItem -List $listName -Identity $item.Id -Connection $siteConnection -Values @{
+                                "TeamChannelError" = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $($_.Exception.Message)"
+                            } -ErrorAction SilentlyContinue | Out-Null
+                        } catch { }
+                        
+                        $stats.Phase1_Errors++
+                    }
+                    
+                    Start-Sleep -Milliseconds 300
+                }
+                
+                # Cleanup Phase 1 admin connection if used
+                if ($phase1AdminConnection) {
+                    try { Disconnect-PnPOnline -Connection $phase1AdminConnection -ErrorAction SilentlyContinue } catch { }
+                }
+            }
+            
+            # Disconnect Graph
+            try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch { }
+            Write-Log "Phase 1 complete. Disconnected from Graph."
+        }
+    }
+    
+    # ============================================================
+    # PHASE 2: Storage & Permissions (via SPO Admin - APP-ONLY)
+    # ============================================================
+    
+    # Skip Phase 2 if running both phases and Phase 1 resolved nothing
+    $skipPhase2 = $false
+    if (-not $Phase1Only -and -not $Phase2Only) {
+        if ($stats.Phase1_TeamChannelsResolved -eq 0 -and $stats.Phase1_Errors -gt 0) {
+            Write-Log "Phase 1 resolved 0 items with $($stats.Phase1_Errors) errors - skipping Phase 2" "WARN"
+            $skipPhase2 = $true
+        }
+    }
+    
+    if (-not $Phase1Only -and -not $skipPhase2) {
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Yellow
+        Write-Host "  PHASE 2: Storage & Permissions (App-Only)" -ForegroundColor Yellow
+        Write-Host "============================================================" -ForegroundColor Yellow
+        
+        # Connect to Admin with app-only auth
+        Write-Log "Connecting to SPO Admin (App-Only)..."
+        
+        try {
+            $adminConnection = Connect-PnPOnline -Url $adminUrl -ClientId $AppClientId -Thumbprint $AppCertificateThumbprint -Tenant $AppTenantId -ErrorAction Stop -ReturnConnection
+            Write-Log "Connected to $adminUrl" "SUCCESS"
+            
+            # Re-fetch items (in case Phase 1 populated new TargetURLs)
+            $allItems = Invoke-WithThrottleRetry -OperationName "Get-PnPListItem" -ScriptBlock {
+                Get-PnPListItem -List $listName -PageSize 500 -Fields "ID","Title","TargetURL","StorageQuota","StorageUsed","StorageAvailable","LastChecked" -Connection $siteConnection
+            }
+            
+            # Filter: TargetURL populated, LastChecked blank
+            $phase2Items = $allItems | Where-Object {
+                $targetUrl = $_["TargetURL"]
+                $lastChecked = $_["LastChecked"]
+                (-not [string]::IsNullOrWhiteSpace($targetUrl)) -and (-not $lastChecked)
+            }
+            
+            $phase2Count = @($phase2Items).Count
+            Write-Log "Found $phase2Count sites needing storage check & permissions"
+            
+            if ($phase2Count -eq 0) {
+                Write-Log "No items to process in Phase 2 - all sites already checked or no TargetURLs populated" "INFO"
+            }
+            
+            if ($phase2Count -gt 0) {
+                if (-not $AutoRun) {
+                    $confirm = Read-Host "Process $phase2Count sites? (Y/N)"
+                    if ($confirm -ne "Y" -and $confirm -ne "y") {
+                        Write-Log "User skipped Phase 2"
+                        $phase2Items = @()
+                    }
+                }
+                
+                foreach ($item in $phase2Items) {
+                    $id = $item.Id
+                    $title = $item["Title"]
+                    $targetUrl = $item["TargetURL"]
+                    
+                    Write-Host "   Processing: $targetUrl" -ForegroundColor Gray
+                    
+                    # Grant permissions
+                    if (Grant-SitePermission -TargetSiteUrl $targetUrl -AdminConnection $adminConnection) {
+                        $stats.Phase2_PermissionsGranted++
+                    }
+                    
+                    try {
+                        # Get storage
+                        $site = Invoke-WithThrottleRetry -OperationName "Get-PnPTenantSite" -ScriptBlock {
+                            Get-PnPTenantSite -Identity $targetUrl -Connection $adminConnection -ErrorAction Stop
+                        }
+                        
+                        $quota = $site.StorageQuota
+                        $used = $site.StorageUsageCurrent
+                        $available = $quota - $used
+                        
+                        # Build ClaimedBy with target server, preserving any existing scan: part
+                        # Re-read item to get current ClaimedBy
+                        $currentItem = Get-PnPListItem -List $listName -Id $id -Connection $siteConnection -ErrorAction SilentlyContinue
+                        $existingClaimedBy = if ($currentItem) { $currentItem["ClaimedBy"] } else { "" }
+                        $scanPart = if ($existingClaimedBy -match 'scan:[\d.]+') { "$($Matches[0])|" } else { "" }
+                        $newClaimedBy = "${scanPart}target:$ServerNumber"
+                        
+                        # Update list item
+                        Invoke-WithThrottleRetry -OperationName "Set-PnPListItem" -ScriptBlock {
+                            Set-PnPListItem -List $listName -Identity $id -Connection $siteConnection -Values @{
+                                StorageQuota     = $quota
+                                StorageUsed      = $used
+                                StorageAvailable = $available
+                                LastChecked      = (Get-Date)
+                                ClaimedBy        = $newClaimedBy
+                            } | Out-Null
+                        }
+                        
+                        Write-Host "   [OK] $title - Quota: $quota MB, Used: $used MB, Available: $available MB" -ForegroundColor Green
+                        $stats.Phase2_SitesChecked++
+                    }
+                    catch {
+                        Write-Host "   [X] $title - $($_.Exception.Message)" -ForegroundColor Red
+                        $stats.Phase2_Errors++
+                    }
+                    
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+            
+            # Disconnect Admin
+            try { Disconnect-PnPOnline -Connection $adminConnection -ErrorAction SilentlyContinue } catch { }
+        }
+        catch {
+            Write-Log "SPO Admin connection failed: $($_.Exception.Message)" "ERROR"
+        }
+    }
+    
+    # ============================================================
+    # SUMMARY
+    # ============================================================
+    
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  UPDATE-MIGRATIONTARGETS COMPLETE" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    
+    if (-not $Phase2Only) {
+        Write-Host "PHASE 1 - Team/Channel Resolution:" -ForegroundColor Yellow
+        Write-Host "  Resolved:  $($stats.Phase1_TeamChannelsResolved)" -ForegroundColor Green
+        Write-Host "  Errors:    $($stats.Phase1_Errors)" -ForegroundColor $(if ($stats.Phase1_Errors -gt 0) { "Red" } else { "Green" })
+    }
+    
+    if (-not $Phase1Only) {
+        Write-Host "PHASE 2 - Storage & Permissions:" -ForegroundColor Yellow
+        Write-Host "  Sites Checked:      $($stats.Phase2_SitesChecked)" -ForegroundColor Green
+        Write-Host "  Permissions Granted: $($stats.Phase2_PermissionsGranted)" -ForegroundColor Green
+        Write-Host "  Errors:             $($stats.Phase2_Errors)" -ForegroundColor $(if ($stats.Phase2_Errors -gt 0) { "Red" } else { "Green" })
+    }
+    
+    Write-Host "============================================================" -ForegroundColor Cyan
+}
+catch {
+    Write-Log "Script error: $($_.Exception.Message)" "ERROR"
+}
+finally {
+    # Cleanup connections
+    try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch { }
+    try { Disconnect-PnPOnline -Connection $siteConnection -ErrorAction SilentlyContinue } catch { }
+    
+    Stop-Transcript
+}

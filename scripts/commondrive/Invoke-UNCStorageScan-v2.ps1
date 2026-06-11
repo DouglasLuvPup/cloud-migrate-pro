@@ -1,0 +1,938 @@
+<# 04/23/26c
+.SYNOPSIS
+    UNC Storage Scanner - Scans file share source paths from a SharePoint tracking list
+    and writes back storage totals bucketed by LastWriteTime (3, 5, 7 years).
+    Supports distributed operation across multiple servers with SPO-based claim locking.
+
+.DESCRIPTION
+    Designed to run as a scheduled task alongside the Common Drive Migration process.
+    Can run on multiple servers simultaneously with automatic work distribution.
+    
+    Workflow:
+      1. Checks for a local lock file to prevent overlapping runs on same server
+         - If lock exists and < LockStaleHours old: exits immediately (another run is active)
+         - If lock exists and > LockStaleHours old: treats as stale (crashed run), removes and proceeds
+         - Creates lock file with PID, start time, and server name
+      2. Connects to the SharePoint tracking list (CommonMigrationStatus)
+      3. Finds available items: SourcePath populated AND Date empty AND (unclaimed OR stale claim)
+      4. Claims up to MaxPaths items by writing server name + timestamp to ClaimedBy/ClaimedAt
+      5. Re-reads to verify claims (handles race conditions with other servers)
+      6. For each claimed source path (processed sequentially):
+         a. Performs a single-pass parallel file enumeration (Invoke-NetworkScan pattern)
+         b. Buckets every file's size by LastWriteTimeUtc into 3-year, 5-year, 7-year bins
+         c. Writes results back to the SPO list item and clears the claim:
+            - _x0033_yr  (total bytes of files modified within 3 years, human-readable)
+            - _x0035_yr  (total bytes of files modified within 5 years, human-readable)
+            - _x0037_yr  (total bytes of files modified within 7 years, human-readable)
+            - TotalSize    (all files regardless of date, human-readable)
+            - FileCount    (total file count)
+            - DirCount     (total directory count)
+            - Errors        (error count during scan)
+            - Date          (UTC timestamp when scan completed)
+            - ScanDuration (elapsed time for the scan)
+      7. Removes lock file on completion
+
+    Key features:
+      - DISTRIBUTED OPERATION: Multiple servers can run simultaneously
+      - SPO-based claim system prevents duplicate work across servers
+      - Stale claims auto-release after ClaimStaleHours (default: 2 hours)
+      - Local lock file prevents overlapping runs on same server
+      - Lock file is refreshed after each source path to prevent false stale detection
+      - Single-pass scan: reads each file once, buckets into all applicable year ranges
+      - Parallel directory scanning via runspace pool (PS 5.1 safe, no [ref])
+      - System.IO streaming enumeration for low memory overhead
+      - Materialized lazy enumerations for safe error handling
+      - Sequential source-path processing to avoid overloading file servers
+      - MaxPaths cap per run to bound total runtime
+      - USSec/IL6 environment support (.scloud URLs)
+      - App-Only authentication for scheduled task / unattended operation
+      - Transcript logging for audit trail
+      - Detailed error logging: captures path, error type, and message for each error
+      - Error categorization: Access Denied, Path Too Long, File Not Found, etc.
+      - Automatic attachment upload: error logs attached to SPO list item
+
+    Recommended Multi-Server Setup:
+      - Deploy to 2-6 servers for parallel processing
+      - Each server runs every 5 minutes with -MaxPaths 5-10
+      - Servers automatically distribute work via claim system
+      - Total capacity: 6 servers × 10 paths = 60 concurrent scans
+
+    Tuning Guide:
+      $LockStaleHours (default 0.5 = 30 minutes):
+        - Local lock file stale threshold for crash recovery
+        - Should be longer than your longest expected single-path scan
+        - Lock is refreshed after each source path, so long runs stay fresh
+      
+      $ClaimStaleHours (default 2):
+        - SPO claim stale threshold for multi-server distribution
+        - Increase if scans routinely take >2 hours (prevents premature re-claim)
+        - Decrease if you want faster failover when a server crashes
+      
+      -MaxPaths (default 10):
+        - Decrease for slower servers or network-constrained environments
+        - Increase for powerful servers with fast network
+      
+      -ThrottleLimit (default 2x CPU cores):
+        - Increase for high-latency shares (more parallelism hides latency)
+        - Decrease if saturating network or overloading file server
+
+.PARAMETER AutoRun
+    When specified, processes all eligible items without interactive prompts.
+    Required for scheduled task operation.
+
+.PARAMETER MaxPaths
+    Maximum number of source paths to process per run. Default: 10.
+    Prevents a single run from taking too long if many new items arrive at once.
+
+.PARAMETER ThrottleLimit
+    Max parallel runspace units for the file scan. Default: 2x logical cores.
+
+.PARAMETER DIV
+    Filter to scan only items from a specific division (e.g., CYD, CTD, IB).
+    When specified, only items where DIV column matches this value will be scanned.
+    Useful for prioritizing a specific division when thousands of items are queued.
+
+.EXAMPLE
+    .\Invoke-UNCStorageScan.ps1 -AutoRun
+    # Scheduled task mode - scans all unscanned source paths (default settings)
+
+.EXAMPLE
+    .\Invoke-UNCStorageScan.ps1 -AutoRun -DIV "CYD" -MaxPaths 20
+    # Scan only CYD division items, up to 20 paths
+
+.EXAMPLE
+    .\Invoke-UNCStorageScan.ps1 -AutoRun -MaxPaths 5 -ThrottleLimit 8
+    # Limit to 5 paths per run and 8 parallel scan threads
+
+.EXAMPLE
+    # Scheduled Task setup (run every 5 minutes):
+    #   Program:   powershell.exe
+    #   Arguments: -NoProfile -ExecutionPolicy Bypass -File "F:\Scripts\Invoke-UNCStorageScan.ps1" -AutoRun -MaxPaths 5 -ThrottleLimit 8
+    #   Run as:    Service account with file share read access
+    #   Trigger:   Every 5 minutes, repeat indefinitely
+
+.EXAMPLE
+    # To force a re-scan of a previously scanned path:
+    #   Clear the Date column for that item in the SharePoint list,
+    #   then the next scheduled run will pick it up automatically.
+
+.NOTES
+    Version : 1.3.0
+    Date    : 2026-03-02
+    Author  : Douglas Cox [Microsoft CSA]
+    Requires:
+      - PowerShell 5.1
+      - PnP.PowerShell module 1.12
+    
+    Local Lock File:
+      Location: F:\UNCScan\UNCScan.lock
+      Contains: PID, start time, server name
+      Auto-expires after LockStaleHours (default: 0.5 = 30 minutes)
+      To force override: delete the lock file manually
+
+    Configuration (edit in script):
+      $MaxPaths         - Items to claim/process per run (default: 10)
+      $LockStaleHours   - Hours before local lock auto-expires (default: 0.5)
+      $ClaimStaleHours  - Hours before SPO claims auto-release (default: 2)
+
+    SPO List Columns to add to CommonMigrationStatus:
+      Column Name       Type              Description
+      ─────────────     ──────────────    ──────────────────────────────────────────
+      _x0033_yr   Single line text   Size of files modified within 3 years
+      _x0035_yr   Single line text   Size of files modified within 5 years
+      _x0037_yr   Single line text   Size of files modified within 7 years
+      Size7YrMB     Number             Raw MB value for 7yr (for storage check)
+      Size5YrMB     Number             Raw MB value for 5yr (for storage check)
+      Size3YrMB     Number             Raw MB value for 3yr (for storage check)
+      TotalSize     Single line text   Total size of all files on share
+      FileCount     Number             Total file count
+      DirCount      Number             Total directory count
+      Errors         Number             Error count during scan
+      Date           Date and Time      Date/time scan was completed (UTC)
+      ScanDuration  Single line text   How long the scan took (hh:mm:ss)
+      ClaimedBy     Single line text   Server name that claimed for scanning
+      ClaimedAt     Date and Time      When the item was claimed (UTC)
+
+.LINK
+    Related: CommonDriveMigration_v1.ps1, Update-SiteStorageTracker.ps1
+#>
+
+param(
+    [switch]$AutoRun,
+    [int]$MaxPaths = 10,
+    [int]$ThrottleLimit = ([Environment]::ProcessorCount * 2),
+    [string]$DIV = ""
+)
+
+$scriptVersion = "1.3.7"
+$ErrorActionPreference = "Continue"
+
+# ============================================================
+# CONFIGURATION - Match your CommonDriveMigration_v1.ps1 values
+# ============================================================
+
+$siteUrl   = "https://contoso.spo.microsoft.scloud/sites/000001"
+$adminUrl  = "https://contoso-admin.spo.microsoft.scloud/"
+$listName  = "CommonMigrationStatus"
+
+# App-Only Authentication
+$UseAppAuth             = $true
+$AppClientId            = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+$AppTenantId            = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+$AppCertificateThumbprint = "1111111111111111111111111111111111111111"
+
+# ── Lock and Claim Settings ──
+# LockStaleHours: Local lock file expires after this (crash recovery)
+# ClaimStaleHours: SPO claims auto-release after this (multi-server distribution)
+$LockStaleHours  = 1    # Hours before local lock is considered stale (1 hour for large shares)
+$ClaimStaleHours = 2    # Hours before SPO claim is considered stale/abandoned
+
+# Logging
+$LogFolder = "F:\UNCScan"
+if (-not (Test-Path $LogFolder)) { New-Item -Path $LogFolder -ItemType Directory -Force | Out-Null }
+
+# ── Lock file to prevent overlapping scheduled task runs ──
+$LockFile = Join-Path $LogFolder "UNCScan.lock"
+if (Test-Path $LockFile) {
+    $lockContent = Get-Content $LockFile -Raw -ErrorAction SilentlyContinue
+    $lockAge = (Get-Date) - (Get-Item $LockFile).LastWriteTime
+    if ($lockAge.TotalHours -lt $LockStaleHours) {
+        # Lock is fresh — another run is likely still going
+        Write-Host "Another scan is already running (lock age: $($lockAge.ToString('hh\:mm\:ss'))). Exiting." -ForegroundColor Yellow
+        Write-Host "Lock info: $lockContent" -ForegroundColor Gray
+        Write-Host "To force, delete: $LockFile" -ForegroundColor Gray
+        exit 0
+    }
+    else {
+        # Stale lock (>LockStaleHours) — previous run probably crashed; proceed
+        Write-Host "Stale lock file found ($($lockAge.ToString('hh\:mm\:ss')) old) — removing and proceeding." -ForegroundColor Yellow
+        Remove-Item $LockFile -Force -ErrorAction SilentlyContinue
+    }
+}
+# Create lock file
+"PID=$PID | Started=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | Server=$env:COMPUTERNAME" | Out-File $LockFile -Force
+
+$transcriptPath = Join-Path $LogFolder "UNCScan_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+Start-Transcript -Path $transcriptPath -Append
+
+# Display identity
+$windowsIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Host "[$scriptVersion] Invoke-UNCStorageScan running as: $windowsIdentity" -ForegroundColor Cyan
+Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC" -ForegroundColor Cyan
+Write-Host "Server: $env:COMPUTERNAME" -ForegroundColor Cyan
+Write-Host "ThrottleLimit: $ThrottleLimit | MaxPaths: $MaxPaths$(if ($DIV) { " | DIV: $DIV" })" -ForegroundColor Cyan
+
+# Server number for ClaimedBy tracking (DC.Server format: 1.1, 1.2, 1.3, 2.1, 2.2, 2.3)
+# Derived from server name pattern: hqdX-sdass-20Y
+$ServerNumber = "$($env:COMPUTERNAME[3]).$($env:COMPUTERNAME[-1])"
+Write-Host "ServerNumber: $ServerNumber" -ForegroundColor Cyan
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+function Format-Size {
+    param([long]$bytes)
+    if ($bytes -ge 1TB) { return ('{0:N2} TB' -f ($bytes / 1TB)) }
+    elseif ($bytes -ge 1GB) { return ('{0:N2} GB' -f ($bytes / 1GB)) }
+    elseif ($bytes -ge 1MB) { return ('{0:N2} MB' -f ($bytes / 1MB)) }
+    elseif ($bytes -ge 1KB) { return ('{0:N2} KB' -f ($bytes / 1KB)) }
+    else { return ('{0} B' -f $bytes) }
+}
+
+function Connect-ToSite {
+    param([string]$Url)
+    try {
+        # Check if already connected to the right URL
+        try {
+            $ctx = Get-PnPContext -ErrorAction Stop
+            $currentUrl = $ctx.Url.TrimEnd('/')
+            $targetUrl  = $Url.TrimEnd('/')
+            if ($currentUrl -eq $targetUrl) { return $true }
+        } catch { }
+
+        # Disconnect any existing connection (ignore errors if none exists)
+        try { Disconnect-PnPOnline -ErrorAction SilentlyContinue } catch { }
+
+        if ($UseAppAuth) {
+            Connect-PnPOnline -Url $Url `
+                -ClientId $AppClientId `
+                -Tenant $AppTenantId `
+                -Thumbprint $AppCertificateThumbprint `
+                -ErrorAction Stop
+        } else {
+            Connect-PnPOnline -Url $Url -UseWebLogin -ErrorAction Stop
+        }
+        Write-Host "   [OK] Connected to $Url" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "   [X] Failed to connect to ${Url}: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# ============================================================
+# GET UNSCANNED ITEMS FROM SPO LIST
+# ============================================================
+
+Write-Host "`n>> Connecting to SharePoint tracking list" -ForegroundColor Cyan
+if (-not (Connect-ToSite -Url $siteUrl)) {
+    Write-Host "FATAL: Cannot connect to $siteUrl - exiting" -ForegroundColor Red
+    Stop-Transcript
+    exit 1
+}
+
+Write-Host "`n>> Retrieving list items from $listName" -ForegroundColor Cyan
+$allItems = Get-PnPListItem -List $listName -PageSize 500 -ErrorAction Stop
+
+# Calculate stale claim cutoff
+$staleCutoff = (Get-Date).ToUniversalTime().AddHours(-$ClaimStaleHours)
+$serverName  = $env:COMPUTERNAME
+
+# Filter: SourcePath populated AND Date empty AND (ClaimedBy empty OR ClaimedAt stale)
+# If -DIV specified, also filter by division
+$availableItems = @()
+foreach ($item in $allItems) {
+    $sourcePath = if ($item["SourcePath"]) { $item["SourcePath"].ToString().Trim() } else { "" }
+    
+    # Check Date - empty means not yet scanned
+    $scanDate = $item["Date"]
+    
+    # Check DIV filter if specified
+    if ($DIV) {
+        $itemDiv = if ($item["DIV"]) { $item["DIV"].ToString().Trim() } else { "" }
+        if ($itemDiv -ne $DIV) { continue }
+    }
+    
+    # Check claim status
+    $claimedBy = $item["ClaimedBy"]
+    $claimedAt = $item["ClaimedAt"]
+    
+    # Item is available if: not scanned AND (unclaimed OR stale claim OR claimed by me OR no active claim)
+    $isUnclaimed = [string]::IsNullOrWhiteSpace($claimedBy)
+    $hasActiveClaim = ($null -ne $claimedAt) -and (-not [string]::IsNullOrWhiteSpace($claimedAt.ToString()))
+    $isStaleClaim = $hasActiveClaim -and ($claimedAt -lt $staleCutoff)
+    $isMyPriorClaim = $claimedBy -eq $serverName  # Crash recovery: same server had active claim
+    $isNoActiveClaim = -not $hasActiveClaim       # Prior scan completed (ClaimedAt cleared) - available for re-scan
+    
+    if (-not [string]::IsNullOrWhiteSpace($sourcePath) -and -not $scanDate) {
+        if ($isUnclaimed -or $isStaleClaim -or $isMyPriorClaim -or $isNoActiveClaim) {
+            $availableItems += $item
+        }
+    }
+}
+
+$totalFound = $availableItems.Count
+Write-Host "   Found $totalFound available source paths (unclaimed or stale)" -ForegroundColor $(if ($totalFound -gt 0) { "Green" } else { "Yellow" })
+Write-Host "   Server: $serverName | Stale cutoff: $($staleCutoff.ToString('yyyy-MM-dd HH:mm:ss')) UTC" -ForegroundColor Gray
+
+if ($totalFound -eq 0) {
+    Write-Host "Nothing to scan. Exiting." -ForegroundColor Cyan
+    Stop-Transcript
+    Remove-Item $LockFile -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
+# Limit to MaxPaths per run
+$itemsToClaim = $availableItems | Select-Object -First $MaxPaths
+Write-Host "   Attempting to claim $($itemsToClaim.Count) items..." -ForegroundColor Yellow
+
+# ============================================================
+# CLAIM ITEMS (distributed locking via SPO)
+# ============================================================
+
+$claimTime = (Get-Date).ToUniversalTime()
+$claimedItems = @()
+
+foreach ($item in $itemsToClaim) {
+    try {
+        Set-PnPListItem -List $listName -Identity $item.Id -Values @{
+            ClaimedBy = $serverName
+            ClaimedAt = $claimTime.ToString("o")
+        } -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Host "   [WARN] Failed to claim ID $($item.Id): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Brief pause to allow any race conditions to settle
+Start-Sleep -Seconds 1
+
+# Re-read items to verify our claims (another server may have claimed same item)
+Write-Host "   Verifying claims..." -ForegroundColor Yellow
+$verifyItems = Get-PnPListItem -List $listName -PageSize 500 -ErrorAction Stop
+
+foreach ($item in $verifyItems) {
+    $claimedBy = $item["ClaimedBy"]
+    $scanDate  = $item["Date"]
+    
+    # Only process items we successfully claimed AND still not scanned
+    if ($claimedBy -eq $serverName -and -not $scanDate) {
+        $claimedItems += $item
+    }
+}
+
+Write-Host "   Successfully claimed $($claimedItems.Count) items" -ForegroundColor Green
+
+if ($claimedItems.Count -eq 0) {
+    Write-Host "No items claimed (race condition or all taken). Exiting." -ForegroundColor Yellow
+    Stop-Transcript
+    Remove-Item $LockFile -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
+# ============================================================
+# CORE SCAN FUNCTION - Single-pass, multi-bucket, parallel
+# Adapted from Invoke-NetworkScan v2.0.0
+# ============================================================
+
+function Invoke-UNCBucketScan {
+    <#
+    .SYNOPSIS
+      Single-pass parallel scan of a UNC path. Returns file size totals
+      bucketed by LastWriteTimeUtc into 3, 5, 7-year windows plus a total.
+    .OUTPUTS
+      PSCustomObject with: Files3Yr, Bytes3Yr, Files5Yr, Bytes5Yr,
+      Files7Yr, Bytes7Yr, TotalFiles, TotalBytes, TotalDirs, TotalErrors, Elapsed
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [int]$ThrottleLimit = ([Environment]::ProcessorCount * 2)
+    )
+
+    $ErrorActionPreference = 'Stop'
+
+    # Date cutoffs (UTC)
+    $now     = (Get-Date).ToUniversalTime()
+    $cut3yr  = $now.AddYears(-3)
+    $cut5yr  = $now.AddYears(-5)
+    $cut7yr  = $now.AddYears(-7)
+
+    # Normalize root
+    $root = $Path.TrimEnd('\')
+    if (-not [System.IO.Directory]::Exists($root)) {
+        throw "Path does not exist or is inaccessible: $Path"
+    }
+
+    # ── Build work units (same partitioning as Invoke-NetworkScan v2) ──
+    $workUnits = New-Object System.Collections.Generic.List[pscustomobject]
+
+    # Root files (non-recursive)
+    $workUnits.Add([pscustomobject]@{ Kind = 'RootFiles'; Path = $root }) | Out-Null
+
+    try {
+        foreach ($l1 in [System.IO.Directory]::EnumerateDirectories($root, '*', [System.IO.SearchOption]::TopDirectoryOnly)) {
+            $l2s = @()
+            try { foreach ($d in [System.IO.Directory]::EnumerateDirectories($l1, '*', [System.IO.SearchOption]::TopDirectoryOnly)) { $l2s += $d } }
+            catch { }
+
+            if ($l2s.Count -eq 0) {
+                $workUnits.Add([pscustomobject]@{ Kind = 'Recursive'; Path = $l1 }) | Out-Null
+                continue
+            }
+
+            # L1's own files
+            $workUnits.Add([pscustomobject]@{ Kind = 'RootFiles'; Path = $l1 }) | Out-Null
+
+            foreach ($l2 in $l2s) {
+                $l3s = @()
+                try { foreach ($d in [System.IO.Directory]::EnumerateDirectories($l2, '*', [System.IO.SearchOption]::TopDirectoryOnly)) { $l3s += $d } }
+                catch { }
+
+                if ($l3s.Count -eq 0) {
+                    $workUnits.Add([pscustomobject]@{ Kind = 'Recursive'; Path = $l2 }) | Out-Null
+                }
+                else {
+                    # L2's own files
+                    $workUnits.Add([pscustomobject]@{ Kind = 'RootFiles'; Path = $l2 }) | Out-Null
+                    foreach ($l3 in $l3s) {
+                        $workUnits.Add([pscustomobject]@{ Kind = 'Recursive'; Path = $l3 }) | Out-Null
+                    }
+                }
+            }
+        }
+    } catch { }
+
+    $totalUnits = $workUnits.Count
+    if ($totalUnits -eq 0) {
+        return [pscustomobject]@{
+            Bytes3Yr = 0L; Bytes5Yr = 0L; Bytes7Yr = 0L; TotalBytes = 0L
+            Files3Yr = 0L; Files5Yr = 0L; Files7Yr = 0L; TotalFiles = 0L
+            TotalDirs = 0L; TotalErrors = 0L; Elapsed = [TimeSpan]::Zero
+            ErrorDetails = @()
+        }
+    }
+
+    # ── Runspace pool ──
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, $ThrottleLimit)
+    $pool.ApartmentState = 'MTA'
+    $pool.Open()
+
+    # ── Scan block (runs in each runspace) ──
+    $scanBlock = {
+        param(
+            [string]$Kind,
+            [string]$UnitPath,
+            [datetime]$Cut3,
+            [datetime]$Cut5,
+            [datetime]$Cut7
+        )
+
+        function New-Counters {
+            [pscustomobject]@{
+                Bytes3Yr = 0L; Bytes5Yr = 0L; Bytes7Yr = 0L; TotalBytes = 0L
+                Files3Yr = 0L; Files5Yr = 0L; Files7Yr = 0L; TotalFiles = 0L
+                Dirs = 0L; Errors = 0L
+                ErrorList = [System.Collections.Generic.List[string]]::new()
+            }
+        }
+
+        function Process-File {
+            param([string]$FilePath, [pscustomobject]$C, [datetime]$C3, [datetime]$C5, [datetime]$C7)
+            try {
+                $fi   = New-Object System.IO.FileInfo($FilePath)
+                $size = $fi.Length
+                $lwt  = $fi.LastWriteTimeUtc
+
+                $C.TotalFiles = [long]$C.TotalFiles + 1L
+                $C.TotalBytes = [long]$C.TotalBytes + [long]$size
+
+                # Bucket by LastWriteTimeUtc - a file modified within 3yr is also within 5yr and 7yr
+                if ($lwt -ge $C7) {
+                    $C.Files7Yr = [long]$C.Files7Yr + 1L
+                    $C.Bytes7Yr = [long]$C.Bytes7Yr + [long]$size
+                }
+                if ($lwt -ge $C5) {
+                    $C.Files5Yr = [long]$C.Files5Yr + 1L
+                    $C.Bytes5Yr = [long]$C.Bytes5Yr + [long]$size
+                }
+                if ($lwt -ge $C3) {
+                    $C.Files3Yr = [long]$C.Files3Yr + 1L
+                    $C.Bytes3Yr = [long]$C.Bytes3Yr + [long]$size
+                }
+            }
+            catch {
+                $C.Errors = [long]$C.Errors + 1L
+                # Capture error detail (limit to 100 per work unit to avoid memory bloat)
+                if ($C.ErrorList.Count -lt 100) {
+                    $errMsg = $_.Exception.Message -replace '[\r\n]+', ' '
+                    $C.ErrorList.Add("FILE|$FilePath|$errMsg")
+                }
+            }
+        }
+
+        function Scan-TopFiles {
+            param([string]$Dir, [pscustomobject]$C, [datetime]$C3, [datetime]$C5, [datetime]$C7)
+            $filesList = @()
+            try { foreach ($f in [System.IO.Directory]::EnumerateFiles($Dir)) { $filesList += $f } }
+            catch {
+                $C.Errors = [long]$C.Errors + 1L
+                if ($C.ErrorList.Count -lt 100) {
+                    $errMsg = $_.Exception.Message -replace '[\r\n]+', ' '
+                    $C.ErrorList.Add("DIR_ENUM|$Dir|$errMsg")
+                }
+            }
+            foreach ($f in $filesList) {
+                Process-File -FilePath $f -C $C -C3 $C3 -C5 $C5 -C7 $C7
+            }
+        }
+
+        function Scan-Recursive {
+            param([string]$Start, [pscustomobject]$C, [datetime]$C3, [datetime]$C5, [datetime]$C7)
+            $stack = New-Object 'System.Collections.Generic.Stack[string]'
+            $stack.Push($Start)
+            while ($stack.Count -gt 0) {
+                $dir = $stack.Pop()
+                $C.Dirs = [long]$C.Dirs + 1L
+
+                $subs = @()
+                try { foreach ($sd in [System.IO.Directory]::EnumerateDirectories($dir)) { $subs += $sd } }
+                catch {
+                    $C.Errors = [long]$C.Errors + 1L
+                    if ($C.ErrorList.Count -lt 100) {
+                        $errMsg = $_.Exception.Message -replace '[\r\n]+', ' '
+                        $C.ErrorList.Add("DIR_ENUM|$dir|$errMsg")
+                    }
+                }
+                foreach ($sd in $subs) { $stack.Push($sd) }
+
+                $files = @()
+                try { foreach ($f in [System.IO.Directory]::EnumerateFiles($dir)) { $files += $f } }
+                catch {
+                    $C.Errors = [long]$C.Errors + 1L
+                    if ($C.ErrorList.Count -lt 100) {
+                        $errMsg = $_.Exception.Message -replace '[\r\n]+', ' '
+                        $C.ErrorList.Add("FILE_ENUM|$dir|$errMsg")
+                    }
+                }
+                foreach ($f in $files) {
+                    Process-File -FilePath $f -C $C -C3 $C3 -C5 $C5 -C7 $C7
+                }
+            }
+        }
+
+        $C = New-Counters
+        if ($Kind -eq 'RootFiles') {
+            Scan-TopFiles -Dir $UnitPath -C $C -C3 $Cut3 -C5 $Cut5 -C7 $Cut7
+        }
+        else {
+            Scan-Recursive -Start $UnitPath -C $C -C3 $Cut3 -C5 $Cut5 -C7 $Cut7
+        }
+        $C
+    }
+
+    # ── Queue jobs ──
+    $jobs = New-Object System.Collections.Generic.List[pscustomobject]
+    foreach ($wu in $workUnits) {
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        $null = $ps.AddScript($scanBlock).
+            AddArgument($wu.Kind).
+            AddArgument($wu.Path).
+            AddArgument($cut3yr).
+            AddArgument($cut5yr).
+            AddArgument($cut7yr)
+        $handle = $ps.BeginInvoke()
+        $jobs.Add([pscustomobject]@{ PS = $ps; Handle = $handle; Taken = $false }) | Out-Null
+    }
+
+    # ── Progress + aggregation ──
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $agg = [pscustomobject]@{
+        Bytes3Yr = 0L; Bytes5Yr = 0L; Bytes7Yr = 0L; TotalBytes = 0L
+        Files3Yr = 0L; Files5Yr = 0L; Files7Yr = 0L; TotalFiles = 0L
+        TotalDirs = 0L; TotalErrors = 0L
+    }
+    $allErrors = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        while ($true) {
+            Start-Sleep -Milliseconds 500
+
+            foreach ($j in $jobs) {
+                if (-not $j.Taken -and $j.Handle.IsCompleted) {
+                    try {
+                        $res = $j.PS.EndInvoke($j.Handle)
+                        foreach ($rsErr in $j.PS.Streams.Error) {
+                            $agg.TotalErrors = [long]$agg.TotalErrors + 1L
+                        }
+                        if ($res -and $res.Count -gt 0) {
+                            $c = $res[0]
+                            $agg.Bytes3Yr    = [long]$agg.Bytes3Yr    + [long]$c.Bytes3Yr
+                            $agg.Bytes5Yr    = [long]$agg.Bytes5Yr    + [long]$c.Bytes5Yr
+                            $agg.Bytes7Yr    = [long]$agg.Bytes7Yr    + [long]$c.Bytes7Yr
+                            $agg.TotalBytes  = [long]$agg.TotalBytes  + [long]$c.TotalBytes
+                            $agg.Files3Yr    = [long]$agg.Files3Yr    + [long]$c.Files3Yr
+                            $agg.Files5Yr    = [long]$agg.Files5Yr    + [long]$c.Files5Yr
+                            $agg.Files7Yr    = [long]$agg.Files7Yr    + [long]$c.Files7Yr
+                            $agg.TotalFiles  = [long]$agg.TotalFiles  + [long]$c.TotalFiles
+                            $agg.TotalDirs   = [long]$agg.TotalDirs   + [long]$c.Dirs
+                            $agg.TotalErrors = [long]$agg.TotalErrors + [long]$c.Errors
+                            # Collect error details from this work unit
+                            if ($c.ErrorList -and $c.ErrorList.Count -gt 0) {
+                                foreach ($errEntry in $c.ErrorList) {
+                                    if ($allErrors.Count -lt 500) { $allErrors.Add($errEntry) }
+                                }
+                            }
+                        }
+                    }
+                    catch {
+                        $agg.TotalErrors = [long]$agg.TotalErrors + 1L
+                        if ($allErrors.Count -lt 500) { $allErrors.Add("JOB_ERROR|unknown|$($_.Exception.Message)") }
+                    }
+                    finally {
+                        $j.Taken = $true
+                        $j.PS.Dispose()
+                    }
+                }
+            }
+
+            $done = (@($jobs | Where-Object { $_.Taken })).Count
+            $pct = [Math]::Min(100, [Math]::Round(($done / [Math]::Max(1, $totalUnits)) * 100, 0))
+            Write-Progress -Activity "Scanning $root" `
+                -Status ("Units: {0}/{1} | Files: {2:N0} | Size: {3}" -f $done, $totalUnits, $agg.TotalFiles, (Format-Size $agg.TotalBytes)) `
+                -PercentComplete $pct
+
+            if ($done -ge $totalUnits) { break }
+        }
+        Write-Progress -Activity "Scanning $root" -Completed
+    }
+    finally {
+        # Force dispose any stuck jobs
+        foreach ($j in $jobs) {
+            if (-not $j.Taken) {
+                try { $j.PS.Stop(); $j.PS.Dispose() } catch { }
+            }
+        }
+        try { $pool.Close(); $pool.Dispose() } catch { }
+        $sw.Stop()
+    }
+
+    # Return aggregated results with error details
+    $agg | Add-Member -NotePropertyName 'Elapsed' -NotePropertyValue $sw.Elapsed
+    $agg | Add-Member -NotePropertyName 'ErrorDetails' -NotePropertyValue $allErrors.ToArray() -PassThru
+}
+
+# ============================================================
+# MAIN LOOP - Process each claimed source path sequentially
+# ============================================================
+
+Write-Host "`n>> Processing $($claimedItems.Count) claimed source path(s)" -ForegroundColor Cyan
+Write-Host ("=" * 60) -ForegroundColor Cyan
+
+$processed = 0
+$failed    = 0
+
+foreach ($item in $claimedItems) {
+    $itemId     = $item.Id
+    $sourcePath = $item["SourcePath"].ToString().Trim()
+    $title      = if ($item["Title"]) { $item["Title"].ToString() } else { "ID $itemId" }
+
+    Write-Host "`n── [$($processed + 1) of $($claimedItems.Count)] $title ──" -ForegroundColor Cyan
+    Write-Host "   SourcePath: $sourcePath" -ForegroundColor Gray
+
+    # Validate source path is accessible
+    if (-not (Test-Path $sourcePath)) {
+        Write-Host "   [SKIP] Source path not accessible: $sourcePath" -ForegroundColor Red
+        
+        # Reconnect to SPO and mark the error, preserve target: part in ClaimedBy
+        if (Connect-ToSite -Url $siteUrl) {
+            $existingClaimedBy = $item["ClaimedBy"]
+            $targetPart = if ($existingClaimedBy -match 'target:[\d.]+') { "|$($Matches[0])" } else { "" }
+            $newClaimedBy = "scan:$ServerNumber$targetPart"
+            
+            Set-PnPListItem -List $listName -Identity $itemId -Values @{
+                Date          = (Get-Date).ToUniversalTime().ToString("o")
+                ScanDuration  = "ERROR"
+                DirCount      = 1
+                ClaimedBy     = $newClaimedBy
+                ClaimedAt     = $null
+            } -ErrorAction SilentlyContinue | Out-Null
+        }
+        $failed++
+        continue
+    }
+
+    # Run the scan
+    Write-Host "   Scanning (ThrottleLimit=$ThrottleLimit)..." -ForegroundColor Yellow
+    $scanResult = $null
+    $scanError  = $null
+
+    try {
+        $scanResult = Invoke-UNCBucketScan -Path $sourcePath -ThrottleLimit $ThrottleLimit
+    }
+    catch {
+        $scanError = $_.Exception.Message
+        Write-Host "   [X] Scan failed: $scanError" -ForegroundColor Red
+    }
+
+    if ($scanResult) {
+        # Format results
+        $mod3yr   = Format-Size $scanResult.Bytes3Yr
+        $mod5yr   = Format-Size $scanResult.Bytes5Yr
+        $mod7yr   = Format-Size $scanResult.Bytes7Yr
+        $totalSz  = Format-Size $scanResult.TotalBytes
+        $elapsed  = $scanResult.Elapsed.ToString("hh\:mm\:ss")
+        
+        # Raw MB values for calculated columns (rounded up for safety margin)
+        $size7YrMB = [math]::Ceiling($scanResult.Bytes7Yr / 1MB)
+        $size5YrMB = [math]::Ceiling($scanResult.Bytes5Yr / 1MB)
+        $size3YrMB = [math]::Ceiling($scanResult.Bytes3Yr / 1MB)
+
+        Write-Host "   ── Results ──" -ForegroundColor Green
+        Write-Host "   Modified 3yr: $mod3yr ($($scanResult.Files3Yr) files) [$size3YrMB MB]" -ForegroundColor White
+        Write-Host "   Modified 5yr: $mod5yr ($($scanResult.Files5Yr) files) [$size5YrMB MB]" -ForegroundColor White
+        Write-Host "   Modified 7yr: $mod7yr ($($scanResult.Files7Yr) files) [$size7YrMB MB]" -ForegroundColor White
+        Write-Host "   Total:        $totalSz ($($scanResult.TotalFiles) files, $($scanResult.TotalDirs) dirs)" -ForegroundColor White
+        Write-Host "   Errors:       $($scanResult.TotalErrors)" -ForegroundColor $(if ($scanResult.TotalErrors -gt 0) { "Yellow" } else { "Green" })
+        Write-Host "   Duration:     $elapsed" -ForegroundColor White
+
+        # Report and log error details if any
+        if ($scanResult.ErrorDetails -and $scanResult.ErrorDetails.Count -gt 0) {
+            Write-Host "   ── Error Details (first 20) ──" -ForegroundColor Yellow
+            
+            # Categorize errors for summary
+            $errorSummary = @{}
+            foreach ($errEntry in $scanResult.ErrorDetails) {
+                $parts = $errEntry -split '\|', 3
+                $errType = if ($parts.Count -ge 1) { $parts[0] } else { "UNKNOWN" }
+                $errPath = if ($parts.Count -ge 2) { $parts[1] } else { "" }
+                $errMsg  = if ($parts.Count -ge 3) { $parts[2] } else { $errEntry }
+                
+                # Extract common error patterns for categorization
+                $category = switch -Regex ($errMsg) {
+                    'Access.*denied|UnauthorizedAccess'           { "Access Denied" }
+                    'path.*long|260|path is too long'              { "Path Too Long" }
+                    'not find file|FileNotFound'                   { "File Not Found" }
+                    'sharing violation|in use by another'          { "File In Use" }
+                    'network.*not accessible|UNC.*not accessible'  { "Network Error" }
+                    default                                         { "Other" }
+                }
+                if (-not $errorSummary.ContainsKey($category)) { $errorSummary[$category] = 0 }
+                $errorSummary[$category]++
+            }
+            
+            # Show error category summary
+            Write-Host "   Error Categories:" -ForegroundColor Yellow
+            foreach ($cat in $errorSummary.Keys | Sort-Object) {
+                Write-Host "     $cat : $($errorSummary[$cat])" -ForegroundColor Gray
+            }
+            
+            # Show first 20 individual errors
+            $shown = 0
+            foreach ($errEntry in $scanResult.ErrorDetails) {
+                if ($shown -ge 20) {
+                    $remaining = $scanResult.ErrorDetails.Count - 20
+                    Write-Host "     ... and $remaining more (see error log)" -ForegroundColor Gray
+                    break
+                }
+                $parts = $errEntry -split '\|', 3
+                $errType = if ($parts.Count -ge 1) { $parts[0] } else { "UNKNOWN" }
+                $errPath = if ($parts.Count -ge 2) { $parts[1] } else { "" }
+                $errMsg  = if ($parts.Count -ge 3) { $parts[2] } else { $errEntry }
+                
+                # Truncate long paths for display
+                $displayPath = if ($errPath.Length -gt 80) { "..." + $errPath.Substring($errPath.Length - 77) } else { $errPath }
+                Write-Host "     [$errType] $displayPath" -ForegroundColor Gray
+                Write-Host "        $errMsg" -ForegroundColor DarkGray
+                $shown++
+            }
+            
+            # Write full error log to CSV file
+            $safeTitle = ($title -replace '[\\/:*?"<>|]', '_')
+            $errorLogPath = Join-Path $LogFolder "UNCscanErrors_${safeTitle}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            
+            # Build CSV data
+            $csvData = @()
+            foreach ($errEntry in $scanResult.ErrorDetails) {
+                $parts = $errEntry -split '\|', 3
+                $errType = if ($parts.Count -ge 1) { $parts[0] } else { "UNKNOWN" }
+                $errPath = if ($parts.Count -ge 2) { $parts[1] } else { "" }
+                $errMsg  = if ($parts.Count -ge 3) { $parts[2] } else { $errEntry }
+                
+                # Categorize for CSV
+                $category = switch -Regex ($errMsg) {
+                    'Access.*denied|UnauthorizedAccess'           { "Access Denied" }
+                    'path.*long|260|path is too long'              { "Path Too Long" }
+                    'not find file|FileNotFound'                   { "File Not Found" }
+                    'sharing violation|in use by another'          { "File In Use" }
+                    'network.*not accessible|UNC.*not accessible'  { "Network Error" }
+                    default                                         { "Other" }
+                }
+                
+                $csvData += [PSCustomObject]@{
+                    SourcePath = $sourcePath
+                    ErrorType  = $errType
+                    Category   = $category
+                    Path       = $errPath
+                    Message    = $errMsg
+                    ScanTime   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                }
+            }
+            $csvData | Export-Csv -Path $errorLogPath -NoTypeInformation -Encoding UTF8
+            Write-Host "   [LOG] Error details written to: $errorLogPath" -ForegroundColor Cyan
+            
+            # Upload error log as attachment to SPO list item
+            Write-Host "   Uploading error log to SharePoint..." -ForegroundColor Yellow
+            if (Connect-ToSite -Url $siteUrl) {
+                try {
+                    $attachmentName = "UNCscanErrors_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+                    Add-PnPListItemAttachment -List $listName -Identity $itemId -Path $errorLogPath -NewFileName $attachmentName -ErrorAction Stop
+                    Write-Host "   [OK] Error log attached: $attachmentName" -ForegroundColor Green
+                }
+                catch {
+                    Write-Host "   [WARN] Failed to attach error log: $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        }
+
+        # Write results back to SPO list - preserve target: part in ClaimedBy, add scan: part
+        Write-Host "   Updating SharePoint list..." -ForegroundColor Yellow
+        if (Connect-ToSite -Url $siteUrl) {
+            try {
+                # Build ClaimedBy with scan server, preserving any existing target: part
+                $existingClaimedBy = $item["ClaimedBy"]
+                $targetPart = if ($existingClaimedBy -match 'target:[\d.]+') { "|$($Matches[0])" } else { "" }
+                $newClaimedBy = "scan:$ServerNumber$targetPart"
+                
+                Set-PnPListItem -List $listName -Identity $itemId -Values @{
+                    _x0033_yr     = "$mod3yr ($($scanResult.Files3Yr) files)"
+                    _x0035_yr     = "$mod5yr ($($scanResult.Files5Yr) files)"
+                    _x0037_yr     = "$mod7yr ($($scanResult.Files7Yr) files)"
+                    Size7YrMB     = $size7YrMB
+                    Size5YrMB     = $size5YrMB
+                    Size3YrMB     = $size3YrMB
+                    TotalSize     = "$totalSz ($($scanResult.TotalFiles) files)"
+                    FileCount     = $scanResult.TotalFiles
+                    DirCount      = $scanResult.TotalDirs
+                    Errors        = $scanResult.TotalErrors
+                    Date          = (Get-Date).ToUniversalTime().ToString("o")
+                    ScanDuration  = $elapsed
+                    ClaimedBy     = $newClaimedBy
+                    ClaimedAt     = $null
+                } -ErrorAction Stop | Out-Null
+
+                Write-Host "   [OK] List updated" -ForegroundColor Green
+                $processed++
+            }
+            catch {
+                Write-Host "   [X] Failed to update list: $($_.Exception.Message)" -ForegroundColor Red
+                $failed++
+            }
+        }
+        else {
+            Write-Host "   [X] Cannot reconnect to SPO to update results" -ForegroundColor Red
+            $failed++
+        }
+    }
+    else {
+        # Scan failed - mark with error, preserve target: part in ClaimedBy
+        if (Connect-ToSite -Url $siteUrl) {
+            $existingClaimedBy = $item["ClaimedBy"]
+            $targetPart = if ($existingClaimedBy -match 'target:[\d.]+') { "|$($Matches[0])" } else { "" }
+            $newClaimedBy = "scan:$ServerNumber$targetPart"
+            
+            Set-PnPListItem -List $listName -Identity $itemId -Values @{
+                Date          = (Get-Date).ToUniversalTime().ToString("o")
+                ScanDuration  = "ERROR"
+                DirCount      = 1
+                ClaimedBy     = $newClaimedBy
+                ClaimedAt     = $null
+            } -ErrorAction SilentlyContinue | Out-Null
+        }
+        $failed++
+    }
+
+    # Brief pause between paths to avoid hammering the file server
+    Start-Sleep -Seconds 2
+    
+    # Touch lock file to prove we're still running (prevents stale-lock false positive)
+    if (Test-Path $LockFile) {
+        (Get-Item $LockFile).LastWriteTime = Get-Date
+    }
+}
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+Write-Host "`n$("=" * 60)" -ForegroundColor Cyan
+Write-Host "UNC STORAGE SCAN COMPLETE" -ForegroundColor Cyan
+Write-Host ("=" * 60) -ForegroundColor Cyan
+Write-Host "Server:    $serverName" -ForegroundColor Cyan
+Write-Host "Claimed:   $($claimedItems.Count)" -ForegroundColor Cyan
+Write-Host "Processed: $processed" -ForegroundColor Green
+Write-Host "Failed:    $failed" -ForegroundColor $(if ($failed -gt 0) { "Red" } else { "Green" })
+Write-Host ("=" * 60) -ForegroundColor Cyan
+
+# Skip Disconnect-PnPOnline - can hang if throttled; connection dies with process anyway
+
+# Remove lock file
+Remove-Item $LockFile -Force -ErrorAction SilentlyContinue
+
+try { Stop-Transcript -ErrorAction SilentlyContinue } catch { }
+
+# Force exit - kills any orphaned runspaces/jobs
+[Environment]::Exit(0)
