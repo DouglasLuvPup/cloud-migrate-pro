@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>On-Prem → SharePoint Online — Detailed Workflow · Cloud Migrate Pro</title>
+<script>
+  (() => {
+    const param = new URLSearchParams(window.location.search).get("scoutTheme");
+    const theme = param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", theme);
+  })();
+</script>
+<link rel="stylesheet" href="workflow.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="wrap navwrap">
+    <a class="brand" href="../index.html"><span class="logo"><img src="../cloud-migrate-pro-logo-icon-192.png" alt="Cloud Migrate Pro"></span><span>Cloud Migrate Pro</span></a>
+    <div class="navlinks">
+      <a href="../index.html#paths">Playbooks</a>
+      <a href="../index.html#diagrams">📊 Flow Diagrams</a>
+      <a href="../index.html#concierge">AI Concierge</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="wrap">
+    <a class="back" href="../index.html#diagrams">← All flow diagrams</a>
+    <span class="eyebrow"><span class="ico">🏢</span> Detailed Workflow</span>
+    <h1>On-Prem → SharePoint Online</h1>
+    <p class="lede">Script-accurate workflow for both OD2OD (MySite → OneDrive, full AD &amp; SCA cutover) and SP2SPO (on-prem site → SPO site, content-only). The two flows share most steps; OD2OD-only branches are labeled.</p>
+  </div>
+</header>
+
+<section class="diagram-section">
+  <div class="wrap">
+    <div class="diagram-toolbar">
+      <button class="tbtn" data-zoom="in" title="Zoom in">＋</button>
+      <button class="tbtn" data-zoom="out" title="Zoom out">−</button>
+      <button class="tbtn" data-zoom="reset" title="Reset / fit to width">⟲ Fit</button>
+      <span class="thint">Drag to pan · Scroll to zoom · Pinch on touch</span>
+    </div>
+    <div class="diagram-shell" id="diagramShell">
+      <pre class="mermaid" id="diag">
+flowchart TD
+    Start([Script start]) --> Boot[Bootstrap:<br/>Ensure-Module SPO PS, SPMT PS,<br/>ActiveDirectory, PnP.PowerShell<br/>+ Add-Type SP Client DLLs]
+    Boot --> Pre[Pre-launch SPMT exe silent + kill<br/>so DLLs are extracted]
+    Pre --> Cred{Credentials<br/>cached in session?}
+    Cred -->|No| Prompt[Get-Credential x2:<br/>SPO admin + on-prem admin]
+    Cred -->|Yes| Trans
+    Prompt --> Trans[Start-Transcript:<br/>F:\SPMTLOGS\Log_SERVER_TIMESTAMP.log]
+    Trans --> Conn[Connect-PnPOnline to SPO list site<br/>UseWebLogin]
+    Conn --> L[(SPO driver list<br/>OneDriveMigrationStatus / SPOMigrationStatus)]
+    L --> Scan[Scan all rows:<br/>skip rows where<br/>Migrate is blank OR Migrated<br/>OR already Processing]
+    Scan --> Mark[For rows where Migrate = Migrate:<br/>set Inprocess/Processing = Processing<br/>stamp Server = COMPUTERNAME]
+    Mark --> Loop{For each<br/>queued row}
+    Loop --> StartD[Stamp DateStarted = now]
+    StartD --> Reg[Register-SPMTMigration<br/>-SPOCredential -SkipFilesWithExtension<br/>-KeepAllVersions -MigrateFileVersionHistory]
+    Reg --> Add[Add-SPMTTask<br/>source URL to target URL<br/>-MigrateAll<br/>-SharePointSourceCredential = on-prem]
+    Add --> Run[Start-SPMTMigration<br/>blocks until done]
+    Run --> Status{Get-SPMTMigration<br/>final status}
+    Status -->|Finished, no FailureSummaryReport| OK[Migrate = Migrated<br/>Log = server + reportPath + transcript<br/>DateMigrated stamped<br/>Inprocess cleared]
+    Status -->|Finished but FailureSummaryReport.csv exists| Err[Remove old attachment<br/>Attach new FailureSummaryReport.csv<br/>Migrate = ErrorLog]
+    Status -->|Status not COMPLETED| Fail[Migrate = Failed<br/>Log stamped<br/>Inprocess cleared for retry]
+    OK --> ODonly{OD2OD<br/>flow?}
+    Err --> ODonly
+    ODonly -->|Yes| SCA[SCA swap on source MySite<br/>EnsureUser svc-filemanager<br/>make Site Collection Admin<br/>demote migrated user]
+    ODonly -->|No SP2SPO| Sleep
+    SCA --> WWW[Set-ADUser wwwHomePage = new OneDrive URL]
+    WWW --> Grp[Remove user from *REDIRECTION* groups<br/>Remove from SecFltr-USR-OneDrive<br/>Add to SecFltr-USR-Office365]
+    Grp --> Flags[List columns:<br/>wwwHomePage = Updated<br/>OnPrem-Disabled = Disabled]
+    Flags --> Sleep[Start-Sleep 120s<br/>throttle pause]
+    Fail --> Sleep
+    Sleep --> Loop
+    Loop -->|All rows processed| End[Stop-Transcript]
+    End --> Note[Power Automate flow on list<br/>watches Migrate = ErrorLog/Failed<br/>emails affected user<br/>script does NOT send mail]
+      </pre>
+    </div>
+  </div>
+</section>
+
+<section class="notes">
+  <div class="wrap">
+    <h2>Shared characteristics</h2>
+    <ul>
+      <li><b>Engine:</b> SPMT 4.2.129.0+ via the PowerShell SPMT module.</li>
+      <li><b>Throttle:</b> ~120 seconds between items.</li>
+      <li><b>Idempotency lock:</b> different column names by flow. <b>OD2OD</b> uses <code>Inprocess</code>; <b>SP2SPO</b> uses <code>Processing</code>. Both stamp <code>Server = $env:COMPUTERNAME</code> so operators can see which host is working the row.</li>
+      <li><b>Status writeback:</b> the <code>Migrate</code> column transitions <code>Migrate → (Processing in lock column) → Migrated | ErrorLog | Failed</code>. <code>ErrorLog</code> means per-file errors with <code>FailureSummaryReport.csv</code> attached to the list item.</li>
+      <li><b>Driver column value:</b> rows must be set to <code>Migrate = Migrate</code> to be picked up. Blank, <code>Migrated</code>, <code>Processing</code>, and <code>Failed</code> rows are skipped.</li>
+      <li><b>Error UX:</b> failure emails are sent by a <b>Power Automate flow on the list</b>, not by the script. Configure the flow to watch <code>Migrate = ErrorLog / Failed</code>.</li>
+      <li><b>AD cutover (OD2OD only):</b> on every successful migration the script stamps <i>wwwHomePage</i> with the new OneDrive URL, removes the user from all groups matching <code>*REDIRECTION*</code>, removes the user from <b>SecFltr-USR-OneDrive</b>, adds the user to <b>SecFltr-USR-Office365</b>, and stamps <code>OnPrem-Disabled = Disabled</code> on the row.</li>
+      <li><b>SCA swap (OD2OD only):</b> on the <b>source on-prem MySite</b>, the script promotes <code>svc-filemanager</code> to Site Collection Admin and demotes the migrated user. SP2SPO does not perform an SCA swap.</li>
+      <li><b>DLL paths differ:</b> OD2OD loads from <code>F:\Tools\</code>; SP2SPO loads from <code>F:\IAU_Scripts\OneDrive_Migration_Scripts\</code>. A wrong path produces an <code>Add-Type</code> failure at bootstrap.</li>
+      <li><b>Version history</b> is preserved end-to-end via <code>-KeepAllVersions $true</code> and <code>-MigrateFileVersionHistory $true</code>.</li>
+      <li><b>Blocked extensions</b> default: <code>.aspx</code>, <code>.pst</code>, <code>.exe</code>, <code>.dll</code> (extensible).</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Cloud Migrate Pro · Concierge v1.0 — June 2026<br>
+    <span class="v">SharePoint · OneDrive · Common Drive migrations · IL5 / IL6 · Commercial-ready</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+<script src="workflow.js"></script>
+</body>
+</html>

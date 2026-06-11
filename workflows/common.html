@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Common Drive → Teams / SharePoint — Detailed Workflow · Cloud Migrate Pro</title>
+<script>
+  (() => {
+    const param = new URLSearchParams(window.location.search).get("scoutTheme");
+    const theme = param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", theme);
+  })();
+</script>
+<link rel="stylesheet" href="workflow.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="wrap navwrap">
+    <a class="brand" href="../index.html"><span class="logo"><img src="../cloud-migrate-pro-logo-icon-192.png" alt="Cloud Migrate Pro"></span><span>Cloud Migrate Pro</span></a>
+    <div class="navlinks">
+      <a href="../index.html#paths">Playbooks</a>
+      <a href="../index.html#diagrams">📊 Flow Diagrams</a>
+      <a href="../index.html#concierge">AI Concierge</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="wrap">
+    <a class="back" href="../index.html#diagrams">← All flow diagrams</a>
+    <span class="eyebrow"><span class="ico">📁</span> Detailed Workflow</span>
+    <h1>Common Drive → Teams / SharePoint</h1>
+    <p class="lede">Script-accurate workflow for the Common Drive migration suite. The suite has two target flows that share the same orchestrator, scheduling, claim-locking, and post-migration cleanup: <b>Flow A</b> (UNC → Teams channel folder via Graph) and <b>Flow B</b> (UNC → SharePoint site directly).</p>
+  </div>
+</header>
+
+<section class="diagram-section">
+  <div class="wrap">
+    <div class="diagram-toolbar">
+      <button class="tbtn" data-zoom="in" title="Zoom in">＋</button>
+      <button class="tbtn" data-zoom="out" title="Zoom out">−</button>
+      <button class="tbtn" data-zoom="reset" title="Reset / fit to width">⟲ Fit</button>
+      <span class="thint">Drag to pan · Scroll to zoom · Pinch on touch</span>
+    </div>
+    <div class="diagram-shell" id="diagramShell">
+      <pre class="mermaid" id="diag">
+flowchart TD
+    CSV[CSV: UNC paths + TeamName +<br/>Channel + TimeZone + Priority<br/>+ DIV + ExtendedHours] --> Imp[Import-MigrationSources.ps1<br/>enumerate subfolders, dedupe,<br/>create per-DIV filtered views<br/>Migrate column starts blank]
+    Imp --> L[(SPO list:<br/>CommonDriveMigration)]
+    L --> Scan[Invoke-UNCStorageScan.v2.ps1<br/>multi-server claim ClaimedBy/ClaimedAt<br/>local lock file UNCScan.lock<br/>parallel runspaces 2x CPU]
+    Scan --> Buckets[Stamp Size3YrMB, Size5YrMB, Size7YrMB<br/>FileCount, DirCount, Errors<br/>ScanDuration, Date<br/>attach error CSV if any]
+    Buckets --> Flow{Flow A Team/Channel<br/>OR Flow B direct SPO site?}
+    Flow -->|Flow A| P1[Update-MigrationTargets.v2.ps1<br/>PHASE 1 - mostly app-only Graph]
+    P1 --> Find[Find-TeamByName<br/>Find-ChannelByName<br/>Get-TeamSiteUrl via /groups/id/sites/root]
+    Find --> Own[Add-TeamGroupOwner<br/>app-only adds svc-filemanager<br/>as M365 Group Owner]
+    Own --> ProvF[Get-ChannelFilesFolder<br/>DELEGATED auth only path<br/>USSec workaround<br/>5x retry x 30s]
+    ProvF --> P2
+    Flow -->|Flow B| P2
+    P2[Update-MigrationTargets.v2.ps1<br/>PHASE 2 - app-only SPO Admin]
+    P2 --> Quota[Read StorageQuota, StorageUsed<br/>compute StorageAvailable<br/>stamp LastChecked - GATING FIELD]
+    Quota --> Opt[Get-OptimalYearCutoff<br/>try 7yr fits? -> else 5yr -> else 3yr<br/>10 pct safety buffer<br/>stamp YearUsed]
+    Opt --> SCA[Grant-SitePermission<br/>svc-filemanager as Site Collection Admin<br/>via Set-PnPTenantSite]
+    SCA --> Ready[Operator flips Migrate column:<br/>Stage / MigrateOnly / Migrate]
+    Ready --> Orch[CommonDriveMigration.v2.ps1<br/>orchestrator<br/>-Continuous -MaxRuntime<br/>-AppClientIdParam multi-instance]
+    Orch --> Pick[Get-SPOListItems<br/>sort by Priority then QueuedAt FIFO<br/>filter where LastChecked set]
+    Pick --> ClaimQ{Claim row atomic<br/>ClaimedBy = SERVER:N<br/>ClaimedAt = now<br/>stale-release after 2h}
+    ClaimQ -->|Claim failed| Pick
+    ClaimQ -->|Won claim| Win{Inside scheduling window?<br/>blocks weekday 06:00-17:00 local<br/>allows nights, weekends,<br/>10 US federal holidays<br/>overnight grace til 04:00}
+    Win -->|No| Rel[Release claim<br/>move to next row]
+    Rel --> Pick
+    Win -->|Yes| Big{Row size >= 10 GB?}
+    Big -->|Yes AND not weekend/holiday/ExtendedHours| Rel
+    Big -->|OK to run| Worker[Invoke-SPMTInSeparateProcess<br/>spawns SPMT-Worker.v2.ps1<br/>isolated PS process<br/>dodges PnP assembly conflicts]
+    Worker --> Json[Build SPMT JSON task:<br/>MigrateItemsModifiedAfter = YearUsed cutoff<br/>SkipFilesWithExtension list<br/>target path under channel folder or site]
+    Json --> RunW[Register-SPMTMigration<br/>Add-SPMTTask<br/>Start-SPMTMigration<br/>return JSON: success, reportPath, errors]
+    RunW --> Outcome{Outcome?}
+    Outcome -->|Stage path success| Staged[Migrate = Staged]
+    Outcome -->|Stage path errors| StagedE[Migrate = StagedWithErrors]
+    Outcome -->|Migrate path success| Done[Migrate = Migrated]
+    Outcome -->|Per-file errors| ErrR[Migrate = ErrorLog<br/>ItemReport_R1.csv attached<br/>error category captured]
+    Outcome -->|Hard failure| FailR[Migrate = Failed<br/>claim released for retry]
+    Done --> Reacl[Set-SourceReadOnly Reacl<br/>break inheritance<br/>flip non-admin ACLs FullControl/Modify<br/>to ReadAndExecute]
+    Reacl --> Del[Start-SourceDeletionInNewWindow<br/>separate PS window<br/>builds DeletionReport.csv<br/>attaches to row]
+    Del --> Empty[Remove-EmptyFoldersAfterMigration<br/>triple-verified bottom-up recursion]
+    Empty --> Pick
+    Staged --> Pick
+    StagedE --> Pick
+    ErrR --> Retry[Retry-FailedMigration.ps1<br/>reads ItemReport_R1 + ItemFailureReport<br/>detects 0-byte uploads<br/>re-queues for next run]
+    Retry --> Pick
+    FailR --> Pick
+    Pick -->|MaxRuntime hit OR no more rows| Stop[Stop-Transcript]
+    L -.->|read by| Dash[New-MigrationDashboard.ps1<br/>HTML pipeline per DIV<br/>Awaiting Scan / Awaiting Target /<br/>Resolved / Queued / Migrating / Complete]
+    Dash -.->|publish to| Pages[SPO sub-pages<br/>under /sites/.../SitePages/]
+    L -.->|read by| Land[New-MigrationLandingPage<br/>+ UserManualPage<br/>+ SystemDocumentationPage]
+    Land -.->|publish to| Pages
+      </pre>
+    </div>
+  </div>
+</section>
+
+<section class="notes">
+  <div class="wrap">
+    <h2>Pipeline phases</h2>
+    <div class="phase-table">
+      <table>
+        <thead><tr><th>Phase</th><th>Script</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>1. Source import</td><td><code>Import-MigrationSources.ps1</code></td><td>CSV of UNC paths → SPO list, enumerate subfolders, create per-DIV filtered views, dedupe. <code>Migrate</code> starts blank.</td></tr>
+          <tr><td>2. Storage scan</td><td><code>Invoke-UNCStorageScan-v2.ps1</code></td><td>Multi-server claim-locked parallel scan. Buckets file ages into 3 / 5 / 7-year totals and stamps row.</td></tr>
+          <tr><td>3a. Target resolve (Flow A)</td><td><code>Update-MigrationTargets.v2.ps1</code> Phase 1</td><td>Graph (mostly app-only) — find Team + Channel, add <code>svc-filemanager</code> as M365 Group Owner, trigger channel folder provisioning via one delegated call (USSec workaround).</td></tr>
+          <tr><td>3b. Quota + SCA</td><td><code>Update-MigrationTargets.v2.ps1</code> Phase 2</td><td>App-only SPO Admin — read quota/used, compute <code>StorageAvailable</code>, stamp <code>LastChecked</code> (the gating field), grant SCA.</td></tr>
+          <tr><td>4. Year-cutoff fit</td><td><code>Get-OptimalYearCutoff</code> (in orchestrator)</td><td>Try 7 → 5 → 3 years to fit <code>StorageAvailable</code> with a 10% safety buffer; stamp chosen horizon as <code>YearUsed</code>.</td></tr>
+          <tr><td>5. Operator handoff</td><td>(manual)</td><td>Operator flips <code>Migrate</code> column to <code>Stage</code>, <code>MigrateOnly</code>, or <code>Migrate</code>.</td></tr>
+          <tr><td>6. Orchestration</td><td><code>CommonDriveMigration.v2.ps1</code></td><td>Sorts by <code>Priority</code> then <code>QueuedAt</code>, claims rows atomically, enforces scheduling, dispatches SPMT, runs post-migration cleanup.</td></tr>
+          <tr><td>7. SPMT execution</td><td><code>SPMT-Worker.v2.ps1</code></td><td>Isolated PowerShell process per task to avoid PnP assembly conflicts. Returns JSON outcome.</td></tr>
+          <tr><td>8. Post-migration</td><td>Reacl + DeleteSource + empty-folder cleanup</td><td>Flip source ACLs to read-only, delete source in a separate window with <code>DeletionReport.csv</code>, triple-verified empty-folder cleanup.</td></tr>
+          <tr><td>9. Retry</td><td><code>Retry-FailedMigration.ps1</code></td><td>Re-process per-file errors and detect 0-byte uploads.</td></tr>
+          <tr><td>10. Reporting</td><td>Dashboard / landing / user manual / system docs</td><td>HTML pipeline dashboard, per-DIV landing page, end-user guide, architecture doc — all published to SPO pages.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Scheduling rules</h2>
+    <ul>
+      <li><b>Blocked window:</b> weekday 06:00–17:00 local time (per-row <code>TimeZone</code>).</li>
+      <li><b>Allowed windows:</b> nights (17:00–06:00 local), all-day weekends, all-day on the 10 pre-configured US federal holidays for 2026–2027 plus overnight grace until 04:00 the day after a holiday.</li>
+      <li><code>TimeZone = ANYTIME</code> runs 24/7.</li>
+      <li><b>Large rows (≥ 10 GB)</b> are restricted to weekends/holidays unless <code>ExtendedHours = Yes</code>.</li>
+      <li><code>Priority</code> + <code>QueuedAt</code> enforce FIFO ordering with priority overrides before the claim attempt.</li>
+    </ul>
+
+    <h2>Claim locking</h2>
+    <ul>
+      <li>Atomic claim writes <code>ClaimedBy = SERVER:N</code> and <code>ClaimedAt = now</code> to the row.</li>
+      <li>Stale-release after <code>ClaimStaleHours = 2h</code> (orchestrator) and <code>LockStaleHours = 0.5h</code> (local lock file for the UNC scanner) — protects against crashes.</li>
+      <li>The scan phase, target phase, and migrate phase all use the same claim pattern, so 6+ servers can work the queue concurrently without double-processing any row.</li>
+    </ul>
+
+    <h2>Error-state writeback</h2>
+    <ul>
+      <li><code>Staged</code> / <code>StagedWithErrors</code> — Stage pass complete; no destination cutover yet.</li>
+      <li><code>Migrated</code> — Full migration complete; Reacl + DeleteSource + empty-folder cleanup ran.</li>
+      <li><code>ErrorLog</code> — Per-file errors; <code>ItemReport_R1.csv</code> attached, category captured.</li>
+      <li><code>Failed</code> — Hard failure; claim released for retry next run.</li>
+    </ul>
+
+    <h2>Multi-instance / multi-server topology</h2>
+    <p><code>-AppClientIdParam</code> and <code>-AppCertThumbprintParam</code> allow each server (or each worker on a server) to use a distinct app registration. This is a deployment choice, not a hard-coded topology — typical production runs use one app per worker to spread throttle buckets, but the script does not assume a specific count.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Cloud Migrate Pro · Concierge v1.0 — June 2026<br>
+    <span class="v">SharePoint · OneDrive · Common Drive migrations · IL5 / IL6 · Commercial-ready</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+<script src="workflow.js"></script>
+</body>
+</html>

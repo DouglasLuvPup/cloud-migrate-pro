@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>H: Drive → OneDrive — Detailed Workflow · Cloud Migrate Pro</title>
+<script>
+  (() => {
+    const param = new URLSearchParams(window.location.search).get("scoutTheme");
+    const theme = param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", theme);
+  })();
+</script>
+<link rel="stylesheet" href="workflow.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="wrap navwrap">
+    <a class="brand" href="../index.html"><span class="logo"><img src="../cloud-migrate-pro-logo-icon-192.png" alt="Cloud Migrate Pro"></span><span>Cloud Migrate Pro</span></a>
+    <div class="navlinks">
+      <a href="../index.html#paths">Playbooks</a>
+      <a href="../index.html#diagrams">📊 Flow Diagrams</a>
+      <a href="../index.html#concierge">AI Concierge</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="wrap">
+    <a class="back" href="../index.html#diagrams">← All flow diagrams</a>
+    <span class="eyebrow"><span class="ico">🏠</span> Detailed Workflow</span>
+    <h1>H: Drive → OneDrive</h1>
+    <p class="lede">Script-accurate workflow for <code>Hdrive-OneDriveScript</code> (v5.2). The script migrates per-user network home drives from <code>\\server\users\&lt;sam&gt;</code> to OneDrive <code>/Documents/HDrive</code> and performs an AD cutover on success. Two operational modes are driven by the row's <code>Migrate</code> column: <b>Stage</b> (content copy only) and <b>Migrate</b> (full cutover).</p>
+  </div>
+</header>
+
+<section class="diagram-section">
+  <div class="wrap">
+    <div class="diagram-toolbar">
+      <button class="tbtn" data-zoom="in" title="Zoom in">＋</button>
+      <button class="tbtn" data-zoom="out" title="Zoom out">−</button>
+      <button class="tbtn" data-zoom="reset" title="Reset / fit to width">⟲ Fit</button>
+      <span class="thint">Drag to pan · Scroll to zoom · Pinch on touch</span>
+    </div>
+    <div class="diagram-shell" id="diagramShell">
+      <pre class="mermaid" id="diag">
+flowchart TD
+    Start([Script start]) --> Boot[Bootstrap:<br/>Ensure-Module SPO/SPMT/AD/PnP<br/>Set-RequiredRegistryKeys<br/>LongPathsEnabled, BlockLongPaths]
+    Boot --> Trans[Start-Transcript:<br/>F:\SPMTTranscripts\Log_SERVER_TIMESTAMP.log]
+    Trans --> Cred{SPMTCred.xml<br/>cached?}
+    Cred -->|Yes| Load[Import-Clixml SPMTCred.xml<br/>DPAPI-decrypted]
+    Cred -->|No| Prompt[Get-Credential prompt]
+    Prompt --> Save[Export-Clixml SPMTCred.xml<br/>DPAPI-encrypted]
+    Save --> Menu
+    Load --> Menu[Interactive picker:<br/>SPO list OR CSV file<br/>NEW / STAGED / MIGRATED]
+    Menu --> Conn[Connect-PnPOnline to driver list<br/>w/ throttle retry 3x 15s]
+    Conn --> Pull[Get-PnPListItem<br/>pageSize 500-2000]
+    Pull --> Filter[Filter rows:<br/>Migrate IN Stage, Migrate<br/>skip Migrated/Processing/blank]
+    Filter --> Loop{For each<br/>queued user}
+    Loop --> PP{Postpone field<br/>has future date?<br/>6 spellings checked}
+    PP -->|Yes| Skip[Skip silently]
+    Skip --> Loop
+    PP -->|No| UPN{UPN present<br/>and valid?}
+    UPN -->|No| BadUPN[Migrate = Invalid UPN]
+    BadUPN --> Loop
+    UPN -->|Yes| Lic{User in license group<br/>O365S-AddOn-License?}
+    Lic -->|No| Unlic[Migrate = Unlicensed]
+    Unlic --> Loop
+    Lic -->|Yes| Resolve[Resolve SAM to UPN<br/>build OneDrive URL]
+    Resolve --> Prov{OneDrive<br/>already provisioned?}
+    Prov -->|No| Req[Request-SPOPersonalSite<br/>retry 3x backoff 60/120/180s]
+    Req --> Verify[Verify-OneDriveProvisioning<br/>poll Get-SPOSite until ready]
+    Prov -->|Yes| SCA02
+    Verify --> SCA02[Set-SPOUser SCA02<br/>OneDriveAdminGroup as SCA]
+    SCA02 --> SpecQ{Row marked<br/>SpecialGroup = Yes?}
+    SpecQ -->|Yes| SCA03[Add SCA03 SpecialGroup as SCA]
+    SpecQ -->|No| Mark
+    SCA03 --> Mark
+    Mark[Stamp Processing = Processing<br/>StartDate, Server = COMPUTERNAME]
+    Mark --> SPMT[Register-SPMTMigration<br/>-SkipFilesWithExtension .pst<br/>-ReplacementOfInvalidChar _<br/>-MigrateWithoutRootFolder]
+    SPMT --> AddT[Add-SPMTTask<br/>UNC \\server\users\sam<br/>to OneDrive /Documents/HDrive]
+    AddT --> RunS[Start-SPMTMigration<br/>throttle retry 5x 10-300s]
+    RunS --> Reports[Consolidate reports:<br/>TaskReport folders<br/>ItemReport_R1*.csv<br/>FailureSummaryReport2.csv<br/>FatalError_*.csv]
+    Reports --> Result{Status?}
+    Result -->|Success no errors| OK1[Migrate = Migrated<br/>LOG, CompletedDate stamped<br/>FailureSummaryReport2.csv attached]
+    Result -->|Per-file errors<br/>attach succeeded| Err1[Migrate = ErrorLog<br/>ItemReport_R1.csv attached]
+    Result -->|Per-file errors<br/>attach FAILED| Manual[Migrate = ManualLog]
+    Result -->|Fatal errors detected| FatalP[Parse FatalError_*.csv<br/>append categorized<br/>error to ScriptError]
+    Result -->|Hard failure| Fail[Migrate = Failed<br/>Processing cleared<br/>row eligible for retry]
+    OK1 --> ModeChk{Was this a<br/>Stage pass?}
+    ModeChk -->|Yes| Staged[Migrate = Staged<br/>or StagedWithErrors<br/>STOP - no AD changes]
+    Staged --> Loop
+    ModeChk -->|No, full Migrate| Reorg[Move-MyDocumentsContent<br/>flatten /Documents/My Documents<br/>into /Documents<br/>hierarchy preserved<br/>throttle-aware, mid-op reconnect]
+    Reorg --> ADcut[AD cutover:<br/>Set-ADUser wwwHomePage = OneDrive URL<br/>Remove from each RedirectGP group<br/>multi-group, comma/newline split]
+    ADcut --> Lockdown[Start-Job Set-Acl<br/>H: source = ReadAndExecute<br/>separate PS process<br/>does not block loop]
+    Lockdown --> Flag[Stamp HReadOnly = Updated<br/>Redirect = Updated]
+    Flag --> Loop
+    Err1 --> Loop
+    Manual --> Loop
+    FatalP --> Loop
+    Fail --> Loop
+    Loop -->|All processed| Cleanup[Stop SPMT migrations<br/>kill Microsoft.SharePoint.Migration* procs]
+    Cleanup --> EndT[Stop-Transcript]
+      </pre>
+    </div>
+  </div>
+</section>
+
+<section class="notes">
+  <div class="wrap">
+    <h2>State management notes</h2>
+    <ul>
+      <li><b>Processing flag</b> is cleared only on the <code>Failed</code> path so the row is retryable. Success / ErrorLog / ManualLog / Fatal paths leave it set and write a terminal <code>Migrate</code> value instead.</li>
+      <li><b>SPO connection</b> is re-established after errors via <code>Ensure-PnPConnection</code>, with a connection cache keyed by URL to keep reconnects cheap.</li>
+      <li><b>SPMT session</b> is properly disposed even on failure; cleanup at end of run also stops migrations and kills <code>Microsoft.SharePoint.Migration*</code> processes.</li>
+      <li><b>SCA cleanup:</b> the script <b>adds</b> SCA02 (<code>OneDriveAdminGroup</code>) and optionally SCA03 (<code>SpecialGroup</code> when the row sets <code>SpecialGroup = Yes</code>) but does <b>not</b> remove them post-migration. Clean up manually with <code>Remove-SPOUser</code> if your governance requires it.</li>
+      <li><b>AD group flips — what actually happens:</b>
+        <ul>
+          <li>The script <b>removes</b> the user from every group listed in the row's <code>RedirectGP</code> column (multi-group, comma- or newline-separated).</li>
+          <li>The script <b>validates</b> that the user is a member of the license group (<code>O365S-AddOn-License</code>) and skips the row if not. It does <b>not</b> add the user to that group, and it does <b>not</b> add the user to <code>SecFltr-USR-Office365</code>. (Those add operations live in the OD2OD on-prem script, not in this H: drive script.)</li>
+        </ul>
+      </li>
+      <li><b>Stage mode stops before AD cutover</b> — the <code>Staged</code> / <code>StagedWithErrors</code> terminal states do not perform My Documents reorg, AD changes, or source lockdown. Re-run the row with <code>Migrate = Migrate</code> to complete the cutover.</li>
+      <li><b>ACL changes</b> run in a separate PowerShell process so a slow ACL walk does not block the user loop.</li>
+      <li><b>Throttle handling:</b> <code>Handle-SPOThrottling</code> (5x, 10–300s, honors <code>Retry-After</code> headers) wraps PnP connections, list reads, SPMT calls, and per-item content moves.</li>
+      <li><b>Long-path support:</b> registry keys <code>LongPathsEnabled=1</code>, <code>BlockLongPaths=0</code>, <code>UseLegacyPathHandling=0</code> are set on bootstrap.</li>
+      <li><b>Audit trail per row:</b> <code>StartDate</code>, <code>CompletedDate</code>, <code>Server</code>, <code>LOG</code>, <code>ScriptError</code> (categorized: LICENSE / UPN / ONEDRIVE PROVISIONING / ATTACHMENT / CONTENT MOVE / AD / SITE ADMIN / FATAL / GENERAL), <code>HReadOnly</code>, <code>Redirect</code>, plus <code>FailureSummaryReport2.csv</code> and <code>FatalError_*.csv</code> attached to the row.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Cloud Migrate Pro · Concierge v1.0 — June 2026<br>
+    <span class="v">SharePoint · OneDrive · Common Drive migrations · IL5 / IL6 · Commercial-ready</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+<script src="workflow.js"></script>
+</body>
+</html>

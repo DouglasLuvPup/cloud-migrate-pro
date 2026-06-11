@@ -117,9 +117,27 @@ code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var
 .dtab.active{background:var(--cp-accent);color:var(--cp-accent-fg);border-color:var(--cp-accent);}
 .dpanel{display:none;}
 .dpanel.active{display:block;animation:rise .4s both;}
-.diagram-card{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:18px;padding:26px 20px;box-shadow:var(--cp-shadow);overflow-x:auto;}
+.diagram-card{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:18px;padding:26px 20px;box-shadow:var(--cp-shadow);overflow-x:auto;cursor:zoom-in;position:relative;transition:border-color .15s;}
+.diagram-card:hover{border-color:var(--cp-accent);}
+.diagram-card::after{content:"\1F50D Click to enlarge";position:absolute;top:10px;right:14px;font-size:.74rem;color:var(--cp-text-soft);font-weight:600;background:var(--cp-surface-soft);padding:4px 10px;border-radius:999px;border:1px solid var(--cp-border);pointer-events:none;}
 .diagram-card .mermaid{display:flex;justify-content:center;min-height:120px;}
 .dcap{text-align:center;color:var(--cp-text-soft);font-size:.88rem;margin-top:16px;font-family:Consolas,"Courier New",monospace;}
+.detail-link{display:block;text-align:center;font-size:.92rem;font-weight:600;color:var(--cp-accent);text-decoration:none;margin-top:10px;padding:8px;border-radius:8px;transition:background .15s;}
+.detail-link:hover{background:var(--cp-accent-soft);}
+
+/* DIAGRAM MODAL */
+.dmodal{position:fixed;inset:0;z-index:200;background:rgba(15,40,80,.78);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:24px;}
+.dmodal.open{display:flex;animation:fadeIn .2s both;}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.dmodal-inner{position:relative;width:min(1400px,100%);height:min(90vh,900px);background:var(--cp-surface);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.55);padding:18px;display:flex;flex-direction:column;gap:10px;}
+.dmodal-bar{display:flex;align-items:center;gap:8px;}
+.dmodal-bar .dtitle{font-weight:700;font-size:1rem;color:var(--cp-text);margin-right:auto;}
+.dmodal-bar .mbtn,.dmodal-bar .mclose{font-family:inherit;font-size:.92rem;font-weight:600;cursor:pointer;padding:7px 12px;border-radius:8px;border:1px solid var(--cp-border);background:var(--cp-surface);color:var(--cp-text);transition:all .15s;}
+.dmodal-bar .mbtn:hover,.dmodal-bar .mclose:hover{border-color:var(--cp-accent);color:var(--cp-accent);}
+.dmodal-bar .mclose{font-size:1.1rem;padding:5px 11px;}
+.dmodal-stage{flex:1;background:var(--cp-bg-elevated);border-radius:12px;border:1px solid var(--cp-border);overflow:hidden;position:relative;}
+.dmodal-stage svg{width:100%;height:100%;display:block;cursor:grab;}
+.dmodal-stage svg:active{cursor:grabbing;}
 @media (max-width:620px){.navlinks a{padding:7px 10px;font-size:.85rem;}.brand span{display:none;}}
 
 /* CHAT */
@@ -277,20 +295,22 @@ footer .v{color:var(--cp-text-muted);}
 flowchart TD
   A["Bootstrap modules + SPMT DLLs"] --> B["Get-Credential: SPO admin + on-prem admin"]
   B --> C[("SPO driver list: SPOMigrationStatus")]
-  C --> D["Read rows where Migrate = Ready"]
+  C --> D["Read rows where Migrate = Migrate"]
   D --> E{"For each site"}
-  E --> F["Lock row = Processing"]
+  E --> F["Lock row: Processing = Processing<br/>Server = COMPUTERNAME"]
   F --> G["Register-SPMTMigration"]
   G --> H["Add-SPMTTask: site to SPO, MigrateAll"]
   H --> I["Start-SPMTMigration + watch status"]
   I --> J{"Result"}
-  J -->|Success| K["Migrate = Migrated + Log path"]
-  J -->|Per-file errors| L["ErrorLog + FailureSummaryReport.csv"]
-  J -->|Hard failure| M["Failed"]
-  K --> N["Power Automate flow emails the user"]
+  J -->|Success| K["Migrate = Migrated<br/>Log + DateMigrated"]
+  J -->|Per-file errors| L["Migrate = ErrorLog<br/>FailureSummaryReport.csv attached"]
+  J -->|Hard failure| M["Migrate = Failed"]
+  L --> N["Power Automate flow on list<br/>emails the user"]
+  M --> N
         </pre>
       </div>
-      <p class="dcap">On-Prem SharePoint site → SharePoint Online · Migration-SP2SPO.ps1</p>
+      <p class="dcap">On-Prem SharePoint site → SharePoint Online · Migration-SP2SPO.ps1 + OD2OD variant</p>
+      <a class="detail-link" href="workflows/onprem.html">📄 Open detailed workflow →</a>
     </div>
 
     <div id="d-hdrive" class="dpanel">
@@ -298,44 +318,54 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   A["Bootstrap modules and long-path keys"] --> B["Get-Credential to DPAPI cache"]
-  B --> C["Pick user CSV"]
+  B --> C["Pick user CSV / SPO list"]
   C --> D{"For each user"}
-  D --> E{"Postpone date in future"}
+  D --> E{"Postpone date in future?<br/>(6 field spellings)"}
   E -->|Yes| S["Skip user, retry next run"]
-  E -->|No| F["Resolve SAM to UPN to OneDrive URL"]
-  F --> G["Provision OneDrive with 3x backoff"]
-  G --> H["Grant migration service account"]
+  E -->|No| LIC{"User in license group?"}
+  LIC -->|No| SKIP["Skip: Unlicensed"]
+  LIC -->|Yes| F["Resolve SAM to UPN to OneDrive URL"]
+  F --> G["Provision OneDrive with 3x backoff<br/>60 / 120 / 180s"]
+  G --> H["Grant migration service account SCA<br/>(+ optional SpecialGroup SCA)"]
   H --> I["Set Processing and record server"]
-  I --> J["SPMT to OneDrive HDrive folder and block pst"]
+  I --> J["SPMT to OneDrive /Documents/HDrive<br/>blocks .pst"]
   J --> K{"Result"}
-  K -->|Success| L["Migrated and reorg to Documents"]
-  L --> M["AD group flips remove OneDrive add Office365 and license"]
-  M --> N["Set source read-only background job"]
-  K -->|Errors| O["ErrorLog and FatalError and ScriptError category"]
-  K -->|Failure| P["Failed retries next run"]
+  K -->|Success| L["Migrate = Migrated<br/>Log + CompletedDate"]
+  L --> REORG["Move-MyDocumentsContent:<br/>flatten /Documents/My Documents into /Documents"]
+  REORG --> M["Stamp wwwHomePage = new OneDrive URL<br/>Remove from RedirectGP groups (multi-group)"]
+  M --> N["Set H: source ReadAndExecute<br/>(background job)"]
+  K -->|Per-file errors| O["Migrate = ErrorLog<br/>ItemReport_R1 + FatalError attached"]
+  K -->|Hard failure| P["Migrate = Failed<br/>retries next run"]
         </pre>
       </div>
       <p class="dcap">Network H: home drive → user OneDrive · Hdrive-OneDriveScript v5.2</p>
+      <a class="detail-link" href="workflows/hdrive.html">📄 Open detailed workflow →</a>
     </div>
 
     <div id="d-common" class="dpanel">
       <div class="diagram-card">
         <pre class="mermaid">
 flowchart TD
-  A["Import-MigrationSources rows Migrate blank"] --> B[("SPO list CommonDriveMigration")]
-  B --> C["Invoke-UNCStorageScan size 3 5 7 yr"]
-  C --> D["Update-MigrationTargets Phase 1 Graph resolve Team and channel and provision folder"]
-  D --> E["Update-MigrationTargets Phase 2 quota check and auto-downgrade 7 to 5 to 3 yr"]
-  E --> F{"Scheduling window open"}
+  A["Import-MigrationSources<br/>CSV to SPO list + per-DIV views"] --> B[("SPO list CommonDriveMigration")]
+  B --> C["Invoke-UNCStorageScan<br/>parallel sweep, size 3 / 5 / 7 yr"]
+  C --> D["Update-MigrationTargets Phase 1<br/>Graph app-only resolve Team + Channel"]
+  D --> E["Update-MigrationTargets Phase 2<br/>quota check + auto-downgrade 7 to 5 to 3 yr"]
+  E --> F{"Inside scheduling window?<br/>blocks 06:00-17:00 weekday"}
   F -->|No| W["Wait for next window"]
-  F -->|Yes| G["Claim row ClaimedBy and ClaimedAt"]
-  G --> H["SPMT-Worker v2 UNC to Teams channel folder"]
+  F -->|Yes| BIG{"Row >= 10 GB?"}
+  BIG -->|Yes, not weekend/holiday/ExtendedHours| W
+  BIG -->|OK| G["Claim row<br/>ClaimedBy + ClaimedAt (2h stale)"]
+  G --> H["SPMT-Worker (isolated process)<br/>UNC to Teams channel folder or SPO site"]
   H --> I{"Result"}
-  I -->|Success| J["Migrated"]
-  I -->|Failed items| K["Retry-FailedMigration ItemReport and zero-byte check"]
+  I -->|Success| J["Migrate = Migrated<br/>YearUsed stamped"]
+  J --> CLEAN["Reacl source to ReadAndExecute<br/>DeleteSource in new window<br/>DeletionReport.csv attached"]
+  I -->|Failed items| K["Retry-FailedMigration<br/>ItemReport + zero-byte check"]
+  I -->|Hard failure| FAIL["Migrate = Failed<br/>claim released"]
+  CLEAN --> DASH["New-MigrationDashboard<br/>per-DIV HTML pipeline"]
         </pre>
       </div>
-      <p class="dcap">Common Drive → Teams channel (Flow A) · CommonDriveMigration.v2.ps1</p>
+      <p class="dcap">Common Drive → Teams channel or SPO site · CommonDriveMigration.v2.ps1</p>
+      <a class="detail-link" href="workflows/common.html">📄 Open detailed workflow →</a>
     </div>
   </div>
 </section>
@@ -367,7 +397,22 @@ flowchart TD
   </div>
 </footer>
 
+<!-- DIAGRAM FULLSCREEN MODAL -->
+<div class="dmodal" id="dmodal" role="dialog" aria-modal="true" aria-labelledby="dmodal-title">
+  <div class="dmodal-inner">
+    <div class="dmodal-bar">
+      <span class="dtitle" id="dmodal-title">Workflow diagram</span>
+      <button class="mbtn" data-mzoom="in" type="button" aria-label="Zoom in">＋</button>
+      <button class="mbtn" data-mzoom="out" type="button" aria-label="Zoom out">−</button>
+      <button class="mbtn" data-mzoom="reset" type="button">Reset</button>
+      <button class="mclose" id="dmodal-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="dmodal-stage" id="dmodal-stage"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
 <script>
   (() => {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -393,6 +438,68 @@ flowchart TD
       btn.classList.add('active');
       render(panel);
     };
+
+    // ===== Fullscreen modal =====
+    const modal = document.getElementById('dmodal');
+    const stage = document.getElementById('dmodal-stage');
+    const title = document.getElementById('dmodal-title');
+    const closeBtn = document.getElementById('dmodal-close');
+    let mPanZoom = null;
+
+    const titles = {
+      'd-onprem': 'On-Prem SharePoint → SharePoint Online',
+      'd-hdrive': 'H: Home Drive → OneDrive',
+      'd-common': 'Common Drive → Teams / SharePoint Online'
+    };
+
+    function openModal(panel) {
+      const svg = panel.querySelector('.mermaid svg');
+      if (!svg) return;
+      const clone = svg.cloneNode(true);
+      clone.removeAttribute('width'); clone.removeAttribute('height');
+      clone.style.width = '100%'; clone.style.height = '100%';
+      stage.innerHTML = '';
+      stage.appendChild(clone);
+      title.textContent = titles[panel.id] || 'Workflow diagram';
+      modal.classList.add('open');
+      document.body.style.overflow = 'hidden';
+      requestAnimationFrame(() => {
+        if (window.svgPanZoom) {
+          if (mPanZoom) { try { mPanZoom.destroy(); } catch (e) {} mPanZoom = null; }
+          mPanZoom = window.svgPanZoom(clone, {
+            zoomEnabled: true, controlIconsEnabled: false,
+            fit: true, center: true, minZoom: 0.3, maxZoom: 8,
+            zoomScaleSensitivity: 0.25, dblClickZoomEnabled: true,
+            mouseWheelZoomEnabled: true, preventMouseEventsDefault: true
+          });
+        }
+      });
+    }
+    function closeModal() {
+      modal.classList.remove('open');
+      document.body.style.overflow = '';
+      if (mPanZoom) { try { mPanZoom.destroy(); } catch (e) {} mPanZoom = null; }
+      stage.innerHTML = '';
+    }
+    document.querySelectorAll('.diagram-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        // Don't trigger when clicking the "view detailed workflow" link nearby
+        const panel = card.closest('.dpanel');
+        if (panel) openModal(panel);
+      });
+    });
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.classList.contains('open')) closeModal(); });
+    document.querySelectorAll('.dmodal-bar [data-mzoom]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!mPanZoom) return;
+        const a = btn.getAttribute('data-mzoom');
+        if (a === 'in') mPanZoom.zoomBy(1.25);
+        else if (a === 'out') mPanZoom.zoomBy(0.8);
+        else if (a === 'reset') { mPanZoom.resetZoom(); mPanZoom.center(); mPanZoom.fit(); }
+      });
+    });
   })();
 </script>
 
