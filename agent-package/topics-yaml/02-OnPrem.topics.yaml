@@ -1,0 +1,230 @@
+# On-Prem → SPO — topic definitions
+
+Agent: **On-Prem SharePoint → SPO Migration Guide** (bot `47c062aa-e264-f111-a826-000d3a5a0da1`)
+
+---
+
+## 1. Conversation Start
+
+Paste into the existing "Conversation Start" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnConversationStart
+  id: main
+  actions:
+    - kind: SendActivity
+      id: introMsg
+      activity: |-
+        🏢 **On-Prem → SPO Migration Specialist**
+
+        I cover the 2024 playbook: on-prem SharePoint Server / OneDrive (MySites)
+        into SharePoint Online or SPO OneDrive. Which sub-scenario are you on?
+    - kind: Question
+      id: qSubFlow
+      alwaysPrompt: false
+      variable: Global.SubFlow
+      prompt: "Pick your path:"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: OD
+            displayName: 🧑 On-prem MySites → SPO OneDrive (OD2OD)
+          - id: Site
+            displayName: 🌐 On-prem SP sites → SPO sites (SP2SPO)
+          - id: Explain
+            displayName: 🤔 Not sure — explain the difference
+    - kind: ConditionGroup
+      id: routeSub
+      conditions:
+        - id: cOD
+          condition: =Global.SubFlow = "OD"
+          actions:
+            - kind: BeginDialog
+              id: goOD
+              dialog: topic.OD2ODOverview
+        - id: cSite
+          condition: =Global.SubFlow = "Site"
+          actions:
+            - kind: BeginDialog
+              id: goSite
+              dialog: topic.SP2SPOOverview
+        - id: cExplain
+          condition: =Global.SubFlow = "Explain"
+          actions:
+            - kind: BeginDialog
+              id: goExplain
+              dialog: topic.SubFlowExplainer
+```
+
+---
+
+## 2. OD2OD Overview
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - OD2OD
+      - mysite
+      - my site
+      - personal site
+      - on-prem onedrive
+      - /my/
+  actions:
+    - kind: SendActivity
+      id: od2odMsg
+      activity: |-
+        **Flow A: On-Prem MySite → SPO OneDrive**
+
+        - Script: `Migration-OD2OD-SPO(09132024).ps1`
+        - Driver list: `OneDriveMigrationStatus`
+        - Source pattern: `https://onedrive.<on-prem>/my/<sam>`
+        - Target pattern: `https://<tenant>-my.<spo-endpoint>/personal/<upn>`
+
+        Ask me for the **workflow diagram**, the **prereq checklist**, a **sample
+        command line**, the **column names**, **throughput**, the **SCA swap**,
+        **AD updates**, or **notifications** — I'll pull it from my knowledge base.
+```
+
+---
+
+## 3. SP2SPO Overview
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - SP2SPO
+      - sharepoint server
+      - on-prem site
+      - team site migration
+      - sp2019
+      - sp2016
+  actions:
+    - kind: SendActivity
+      id: sp2spoMsg
+      activity: |-
+        **Flow B: On-Prem SP site → SPO site**
+
+        - Script: `Migration-SP2SPO` (2024 playbook)
+        - Driver list: `SPOMigrationStatus`
+        - Moves on-prem SharePoint 2016/2019 team sites into SharePoint Online.
+
+        Ask me for the **workflow diagram**, **prereqs**, a **sample call**,
+        **column names**, **throughput**, the **SCA swap**, or **AD updates** —
+        I'll answer from my knowledge base.
+```
+
+---
+
+## 4. Sub-Flow Explainer
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - what's the difference
+      - explain
+      - compare flows
+  actions:
+    - kind: SendActivity
+      id: explainMsg
+      activity: |-
+        Two sub-flows, picked by **what** you're moving:
+
+        | | OD2OD | SP2SPO |
+        |---|---|---|
+        | Source | On-prem MySites (personal) | On-prem team sites |
+        | Target | SPO OneDrive | SPO sites |
+        | Driver list | `OneDriveMigrationStatus` | `SPOMigrationStatus` |
+
+        Which one are you on — **personal MySites** or **team sites**?
+    - kind: Question
+      id: qPick
+      alwaysPrompt: true
+      variable: Global.SubFlow
+      prompt: "Personal MySites or team sites?"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: OD
+            displayName: Personal MySites (OD2OD)
+          - id: Site
+            displayName: Team sites (SP2SPO)
+    - kind: ConditionGroup
+      id: routePick
+      conditions:
+        - id: pOD
+          condition: =Global.SubFlow = "OD"
+          actions:
+            - kind: BeginDialog
+              id: goOD2
+              dialog: topic.OD2ODOverview
+        - id: pSite
+          condition: =Global.SubFlow = "Site"
+          actions:
+            - kind: BeginDialog
+              id: goSite2
+              dialog: topic.SP2SPOOverview
+```
+
+---
+
+## 5. Out of Scope / Back to Concierge
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - h drive
+      - home drive
+      - common drive
+      - shared drive
+      - file share
+      - mailbox
+      - back
+      - concierge
+      - different scenario
+  actions:
+    - kind: SendActivity
+      id: oosMsg
+      activity: |-
+        That one's outside my lane — I only cover **on-prem SharePoint / MySites
+        → SPO**. Head back to the **Concierge** and it'll route you to the right
+        specialist (H: Drive or Common Drive).
+```
+
+---
+
+## 6. Fallback
+
+Paste into the existing "Fallback" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnUnknownIntent
+  id: main
+  actions:
+    - kind: SendActivity
+      id: fbMsg
+      activity: |-
+        I'm focused on the **On-Prem → SPO** playbook (MySites and team sites).
+        If your question is about that, ask away — for anything else, the
+        **Concierge** can point you to the right specialist.
+```
+</content>

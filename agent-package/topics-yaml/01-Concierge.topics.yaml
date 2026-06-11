@@ -1,0 +1,272 @@
+# Concierge — topic definitions (paste one block per topic)
+
+Agent: **Cloud Migrate Pro Concierge** (bot `8eedcb8b-e864-f111-a826-000d3a5a0da1`)
+
+---
+
+## 1. Conversation Start — welcome adaptive card
+
+Paste into the **existing** "Conversation Start" system topic (edit it, open code editor).
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnConversationStart
+  id: main
+  actions:
+    - kind: SendActivity
+      id: sendWelcomeCard
+      activity:
+        attachments:
+          - kind: AdaptiveCardTemplate
+            cardContent: |-
+              {
+                "type": "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "emphasis",
+                    "bleed": true,
+                    "items": [
+                      { "type": "TextBlock", "text": "Cloud Migrate Pro Concierge", "size": "ExtraLarge", "weight": "Bolder", "color": "Accent", "wrap": true },
+                      { "type": "TextBlock", "text": "Three playbooks. One front door.", "isSubtle": true, "spacing": "None", "wrap": true }
+                    ]
+                  },
+                  { "type": "TextBlock", "text": "I route you to the right specialist for your scenario — no cross-wired advice, no invented settings. Pick your scenario:", "wrap": true, "spacing": "Medium" },
+                  {
+                    "type": "ColumnSet",
+                    "columns": [
+                      { "type": "Column", "width": "stretch", "style": "good", "items": [ { "type": "TextBlock", "text": "🏢 On-Prem → SPO", "weight": "Bolder", "wrap": true }, { "type": "TextBlock", "text": "On-prem SharePoint sites or home sites → Microsoft 365", "size": "Small", "isSubtle": true, "wrap": true } ], "selectAction": { "type": "Action.Submit", "title": "On-Prem", "data": { "choice": "OnPrem" } } },
+                      { "type": "Column", "width": "stretch", "style": "warning", "items": [ { "type": "TextBlock", "text": "🏠 H: Drive → OneDrive", "weight": "Bolder", "wrap": true }, { "type": "TextBlock", "text": "Personal network home drive → your OneDrive", "size": "Small", "isSubtle": true, "wrap": true } ], "selectAction": { "type": "Action.Submit", "title": "H: Drive", "data": { "choice": "HDrive" } } },
+                      { "type": "Column", "width": "stretch", "style": "accent", "items": [ { "type": "TextBlock", "text": "📁 Common Drive → SPO", "weight": "Bolder", "wrap": true }, { "type": "TextBlock", "text": "Shared team drive → Teams channel or SharePoint site", "size": "Small", "isSubtle": true, "wrap": true } ], "selectAction": { "type": "Action.Submit", "title": "Common Drive", "data": { "choice": "CommonDrive" } } }
+                    ]
+                  },
+                  { "type": "TextBlock", "text": "Not sure which one?", "spacing": "Medium", "weight": "Bolder" }
+                ],
+                "actions": [
+                  { "type": "Action.Submit", "title": "🤔 Help me decide", "data": { "choice": "Decide" } },
+                  { "type": "Action.Submit", "title": "ℹ️ About this agent", "data": { "choice": "About" } }
+                ]
+              }
+    - kind: Question
+      id: question_choice
+      alwaysPrompt: false
+      variable: Topic.UserChoice
+      prompt:
+        text:
+          - ""
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: OnPrem
+            displayName: OnPrem
+          - id: HDrive
+            displayName: HDrive
+          - id: CommonDrive
+            displayName: CommonDrive
+          - id: Decide
+            displayName: Decide
+          - id: About
+            displayName: About
+    - kind: ConditionGroup
+      id: route
+      conditions:
+        - id: cOnPrem
+          condition: =Topic.UserChoice = "OnPrem"
+          actions:
+            - kind: SendActivity
+              id: hOnPrem
+              activity: "🏢 Routing you to the On-Prem → SPO specialist now."
+        - id: cHDrive
+          condition: =Topic.UserChoice = "HDrive"
+          actions:
+            - kind: SendActivity
+              id: hHDrive
+              activity: "🏠 Routing you to the H: Drive → OneDrive specialist now."
+        - id: cCommon
+          condition: =Topic.UserChoice = "CommonDrive"
+          actions:
+            - kind: SendActivity
+              id: hCommon
+              activity: "📁 Routing you to the Common Drive specialist now."
+        - id: cDecide
+          condition: =Topic.UserChoice = "Decide"
+          actions:
+            - kind: BeginDialog
+              id: goDecide
+              dialog: topic.HelpMeDecide
+        - id: cAbout
+          condition: =Topic.UserChoice = "About"
+          actions:
+            - kind: BeginDialog
+              id: goAbout
+              dialog: topic.AboutTheConcierge
+```
+
+> With generative orchestration ON, the three "Routing you to…" branches hand off
+> automatically to the connected specialist. The messages just set expectations.
+
+---
+
+## 2. About the Concierge
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - what can you do
+      - what is this
+      - about
+      - help
+      - who built this
+  actions:
+    - kind: SendActivity
+      id: aboutMsg
+      activity: |-
+        I'm a router, not a doer. I connect you to one of three specialist
+        migration guides — each grounded only in the scripts for that scenario,
+        so you never get cross-wired advice.
+
+        | Playbook | What it moves | Where it goes |
+        |---|---|---|
+        | 🏢 On-Prem → SPO | On-prem SharePoint sites / home sites | SharePoint Online / OneDrive |
+        | 🏠 H: Drive → OneDrive | Your personal network home drive | Your OneDrive |
+        | 📁 Common Drive → SPO | A shared team drive | Teams channel or SharePoint site |
+
+        **What I won't do:** mix scenarios, invent settings, or run anything for
+        you. You drive — I navigate. Which one sounds like your move?
+```
+
+---
+
+## 3. Help Me Decide
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - help me decide
+      - not sure
+      - I don't know which one
+      - pick one for me
+  actions:
+    - kind: Question
+      id: qSource
+      alwaysPrompt: true
+      variable: Topic.Source
+      prompt: "Where do the files live today?"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: OnPrem
+            displayName: On a SharePoint server we host
+          - id: HDrive
+            displayName: In a personal home folder on a file server
+          - id: CommonDrive
+            displayName: In a shared/common folder on a file server
+          - id: Unknown
+            displayName: Something else
+    - kind: ConditionGroup
+      id: decide
+      conditions:
+        - id: dOnPrem
+          condition: =Topic.Source = "OnPrem"
+          actions:
+            - kind: SendActivity
+              id: rOnPrem
+              activity: "Sounds like the **On-Prem → SPO** playbook. Handing you to that specialist now."
+        - id: dHDrive
+          condition: =Topic.Source = "HDrive"
+          actions:
+            - kind: SendActivity
+              id: rHDrive
+              activity: "Sounds like the **H: Drive → OneDrive** playbook. Handing you over now."
+        - id: dCommon
+          condition: =Topic.Source = "CommonDrive"
+          actions:
+            - kind: SendActivity
+              id: rCommon
+              activity: "Sounds like the **Common Drive → SPO** playbook. Handing you over now."
+      elseActions:
+        - kind: SendActivity
+          id: rUnknown
+          activity: "That sounds out of scope for these three playbooks — best to check with the migration team."
+```
+
+---
+
+## 4. Why these scripts vs third-party (Positioning)
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - why this
+      - why not ShareGate
+      - ShareGate
+      - AvePoint
+      - Quest
+      - BitTitan
+      - Migration Manager
+      - SPMT
+      - compare tools
+      - why custom
+      - buy vs build
+      - which migration tool
+  actions:
+    - kind: SendActivity
+      id: posMsg
+      activity: |-
+        Short answer: **cost, sovereign-cloud coverage, and federal-specific
+        identity glue that no off-the-shelf tool ships with.**
+
+        1. **Runs in IL5 and IL6 today** — the same code ships to commercial,
+           GCC-H/IL5, and IL6 with only an endpoint suffix swap.
+        2. **$0 licensing** — built on free Microsoft SPMT; the orchestration
+           layer is owned IP.
+        3. **Federal-specific identity workflow** (AD home-page flip, redirection
+           group cleanup, license group swap, conditional admin grants) that
+           commercial tools don't include.
+        4. **No vendor cloud in the data path** — source → your infrastructure →
+           Microsoft 365. Nothing routes through a third-party cloud.
+
+        Want the detailed tool-by-tool comparison? Ask me about a specific tool
+        (ShareGate, AvePoint, Quest, BitTitan) and I'll pull the specifics from
+        my knowledge base.
+
+        > Any dollar figures are industry estimates — confirm with a live vendor
+        > quote before any customer-facing claim.
+```
+
+---
+
+## 5. Fallback (off-scope handling)
+
+Paste into the **existing** "Fallback" system topic (edit it).
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnUnknownIntent
+  id: main
+  actions:
+    - kind: SendActivity
+      id: fbMsg
+      activity: |-
+        I'm the front door for three migration playbooks — **On-Prem → SPO**,
+        **H: Drive → OneDrive**, and **Common Drive → SPO**. I can't help much
+        outside those, but tell me which one fits and I'll route you to the right
+        specialist. Want me to **help you decide**?
+```
+</content>

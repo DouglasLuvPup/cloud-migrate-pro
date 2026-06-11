@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<!--
+  Cloud Migrate Pro — Custom Website wrapper for the Concierge agent.
+
+  This page REPLACES the default Copilot Studio "I'm your new agent" demo
+  landing with your own branding, and embeds the published Concierge chat.
+
+  ── ONE THING TO DO BEFORE THIS GOES LIVE ─────────────────────────────────
+  Paste your agent's Token Endpoint URL into TOKEN_ENDPOINT below.
+
+  Where to find it:
+    Copilot Studio  →  open the Concierge  →  Channels  →  "Custom website"
+    →  copy the "Token endpoint" URL.
+  It looks like:
+    https://<...>.environment.api.powerplatform.com/powervirtualagents/bots/<botId>/directline/token?api-version=2022-03-01-preview
+
+  No other setup is required — the agent is set to "No authentication", so any
+  visitor with this page can chat anonymously.
+  ──────────────────────────────────────────────────────────────────────────
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cloud Migrate Pro — Concierge</title>
+  <link rel="icon" href="../assets/cloud-migrate-pro-logo-icon.png" />
+  <style>
+    :root {
+      --brand:        #0f6cbd;   /* primary accent */
+      --brand-dark:   #0a4d86;
+      --bg:           #f3f6fb;
+      --panel:        #ffffff;
+      --ink:          #1b1f24;
+      --ink-subtle:   #5a6470;
+      --radius:       14px;
+      --shadow:       0 10px 35px rgba(15, 108, 189, .14);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1100px 500px at 100% -10%, #e1edfb 0%, transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, #e7f7ef 0%, transparent 55%),
+        var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header / hero ─────────────────────────────────────────────── */
+    header.hero {
+      padding: 28px clamp(16px, 5vw, 56px) 8px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header.hero img.logo { height: 52px; width: auto; }
+    header.hero .titles h1 {
+      margin: 0;
+      font-size: clamp(20px, 2.4vw, 28px);
+      letter-spacing: -.3px;
+    }
+    header.hero .titles p {
+      margin: 2px 0 0;
+      color: var(--ink-subtle);
+      font-size: 14px;
+    }
+
+    .intro {
+      padding: 4px clamp(16px, 5vw, 56px) 0;
+      max-width: 880px;
+    }
+    .intro h2 {
+      font-size: clamp(22px, 3vw, 34px);
+      margin: 14px 0 8px;
+      line-height: 1.15;
+    }
+    .intro h2 .accent { color: var(--brand); }
+    .intro p.lede {
+      margin: 0 0 14px;
+      color: var(--ink-subtle);
+      font-size: 16px;
+      max-width: 720px;
+    }
+
+    /* ── Scenario chips ────────────────────────────────────────────── */
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 4px clamp(16px, 5vw, 56px) 0;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--panel);
+      border: 1px solid #dce4ee;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 13.5px;
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    .chip b { font-weight: 600; }
+    .chip span.tag { color: var(--ink-subtle); font-size: 12px; }
+
+    /* ── Chat panel ────────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      padding: 22px clamp(12px, 5vw, 56px) 36px;
+      min-height: 0;
+    }
+    .chat-shell {
+      width: 100%;
+      max-width: 900px;
+      background: var(--panel);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 560px;
+    }
+    .chat-shell .bar {
+      background: linear-gradient(90deg, var(--brand), var(--brand-dark));
+      color: #fff;
+      padding: 12px 18px;
+      font-weight: 600;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .chat-shell .bar .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: #41d18b; box-shadow: 0 0 0 3px rgba(65,209,139,.25);
+    }
+    #webchat { flex: 1; min-height: 0; }
+
+    /* setup notice shown until token endpoint is filled in */
+    #setup-note {
+      margin: auto;
+      max-width: 520px;
+      text-align: center;
+      color: var(--ink-subtle);
+      padding: 40px 24px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    #setup-note code {
+      background: #eef3f9; padding: 1px 6px; border-radius: 5px;
+      font-size: 12.5px; color: var(--brand-dark);
+    }
+
+    footer {
+      text-align: center;
+      color: var(--ink-subtle);
+      font-size: 12px;
+      padding: 0 16px 18px;
+    }
+
+    @media (max-width: 560px) {
+      header.hero { flex-direction: row; }
+      .chat-shell { min-height: 70vh; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <img class="logo" src="../assets/cloud-migrate-pro-logo-.png" alt="Cloud Migrate Pro" />
+    <div class="titles">
+      <h1>Cloud Migrate Pro</h1>
+      <p>Three migration playbooks. One front door.</p>
+    </div>
+  </header>
+
+  <section class="intro">
+    <h2>Tell us what you're moving — <span class="accent">we'll route you to the right specialist.</span></h2>
+    <p class="lede">
+      Describe your migration in plain language. The Concierge figures out which of the three
+      scenarios you need and hands you to the specialist guide — no cross-wired advice, no invented settings.
+    </p>
+  </section>
+
+  <div class="chips">
+    <div class="chip">🏢 <b>On-Prem → SharePoint Online</b> <span class="tag">sites &amp; MySites</span></div>
+    <div class="chip">🏠 <b>H: Drive → OneDrive</b> <span class="tag">network home drives</span></div>
+    <div class="chip">📁 <b>Common Drive → Teams / SharePoint</b> <span class="tag">shared UNC drives</span></div>
+  </div>
+
+  <main>
+    <div class="chat-shell">
+      <div class="bar"><span class="dot"></span> Cloud Migrate Pro Concierge</div>
+      <div id="webchat" role="main">
+        <div id="setup-note">
+          <p><strong>Almost ready.</strong> Paste your agent's <em>Token endpoint</em> URL into
+          <code>TOKEN_ENDPOINT</code> near the top of this file's script block, then reload.</p>
+          <p>Find it in Copilot Studio → <strong>Channels → Custom website → Token endpoint</strong>.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    © Microsoft 2026 · Cloud Migrate Pro · The agent explains and plans migrations; it never moves or deletes data.
+  </footer>
+
+  <!-- Bot Framework Web Chat (official CDN) -->
+  <script src="https://cdn.botframework.com/botframework-webchat/latest/webchat.js"></script>
+  <script>
+    // ────────────────────────────────────────────────────────────────
+    // PASTE YOUR TOKEN ENDPOINT URL HERE (see header comment for where):
+    const TOKEN_ENDPOINT = "";
+    // ────────────────────────────────────────────────────────────────
+
+    const styleOptions = {
+      // brand the chat to match the page
+      accent: "#0f6cbd",
+      botAvatarInitials: "CM",
+      userAvatarInitials: "You",
+      bubbleBackground: "#f1f6fc",
+      bubbleBorderRadius: 12,
+      bubbleFromUserBackground: "#0f6cbd",
+      bubbleFromUserTextColor: "#ffffff",
+      bubbleFromUserBorderRadius: 12,
+      rootHeight: "100%",
+      rootWidth: "100%",
+      hideUploadButton: true,
+      sendBoxButtonColor: "#0f6cbd",
+      backgroundColor: "#ffffff"
+    };
+
+    async function boot() {
+      if (!TOKEN_ENDPOINT) return; // leave the setup note visible
+
+      try {
+        // 1) exchange the public token endpoint for a Direct Line token
+        const res = await fetch(TOKEN_ENDPOINT, { method: "GET" });
+        if (!res.ok) throw new Error("Token request failed: " + res.status);
+        const { token } = await res.json();
+
+        // 2) render Web Chat into our branded shell
+        document.getElementById("setup-note")?.remove();
+        window.WebChat.renderWebChat(
+          {
+            directLine: window.WebChat.createDirectLine({ token }),
+            styleOptions,
+            locale: "en-US"
+          },
+          document.getElementById("webchat")
+        );
+      } catch (err) {
+        const note = document.getElementById("setup-note");
+        if (note) {
+          note.innerHTML =
+            "<p><strong>Couldn't connect to the agent.</strong></p>" +
+            "<p style='font-size:12.5px'>" + String(err) + "</p>" +
+            "<p>Check that the Token endpoint URL is correct and the agent is published.</p>";
+        }
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

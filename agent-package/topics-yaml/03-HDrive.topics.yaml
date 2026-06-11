@@ -1,0 +1,203 @@
+# H: Drive → OneDrive — topic definitions
+
+Agent: **H: Drive → OneDrive Migration Guide** (bot `1481ff11-e464-f111-a826-000d3a5a0da1`)
+
+---
+
+## 1. Conversation Start
+
+Paste into the existing "Conversation Start" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnConversationStart
+  id: main
+  actions:
+    - kind: SendActivity
+      id: introMsg
+      activity: |-
+        🏠 **H: Drive → OneDrive Migration Specialist**
+
+        I cover the 2025 playbook: your personal network home drive
+        (`\\server\users\<you>`) into your OneDrive under `/Documents/HDrive`.
+    - kind: Question
+      id: qPath
+      alwaysPrompt: false
+      variable: Topic.Choice
+      prompt: "Pick a path:"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: Workflow
+            displayName: Workflow diagram
+          - id: Prereqs
+            displayName: What I need first
+          - id: Sample
+            displayName: Sample command
+          - id: Errors
+            displayName: Errors & retry
+          - id: SCA
+            displayName: Admin-access cleanup
+          - id: Status
+            displayName: Status values
+          - id: Back
+            displayName: Back to Concierge
+    - kind: ConditionGroup
+      id: route
+      conditions:
+        - id: cBack
+          condition: =Topic.Choice = "Back"
+          actions:
+            - kind: SendActivity
+              id: backMsg
+              activity: "No problem — head back to the **Concierge** and it'll route you wherever you need."
+      elseActions:
+        - kind: SendActivity
+          id: askMsg
+          activity: "Great — ask me about that and I'll pull the details from my knowledge base (diagrams, prereqs, sample commands, errors, admin-access cleanup, and status values are all covered)."
+```
+
+---
+
+## 2. Credentials / SPMTCred.xml
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - credential
+      - password
+      - SPMTCred
+      - re-prompt
+      - login
+  actions:
+    - kind: SendActivity
+      id: credMsg
+      activity: |-
+        The script caches your Microsoft 365 sign-in at:
+        `%USERPROFILE%\SPMTCred.xml`
+
+        To force a fresh sign-in, delete that file:
+        `Remove-Item $env:USERPROFILE\SPMTCred.xml`
+
+        It's protected so only your account on that machine can read it — don't
+        copy it to other machines.
+```
+
+---
+
+## 3. Admin-access (SCA) claims
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - SCA
+      - site collection admin
+      - claim
+      - SpecialGroup
+      - admin access
+  actions:
+    - kind: SendActivity
+      id: scaMsg
+      activity: |-
+        To copy your files in, the script temporarily grants admin access to your
+        OneDrive:
+
+        - **Always** adds the OneDrive admin group.
+        - Adds the tenant-admin group **only** when the row's `SpecialGroup`
+          column is `Yes`.
+
+        Important: the script does **not** remove this access afterward — it
+        stays on your OneDrive. If your governance requires removal, that's a
+        manual cleanup step. Ask me for the exact command.
+```
+
+---
+
+## 4. Status values
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - status
+      - Migrate column
+      - what does ErrorLog mean
+      - ManualLog
+      - state values
+  actions:
+    - kind: SendActivity
+      id: statusMsg
+      activity: |-
+        The `Migrate` column tells you where a user is in the move:
+
+        - **Ready** – queued, not started
+        - **Processing** – currently running
+        - **Migrated** – done successfully
+        - **Failed** – clears `Processing` so it can be retried
+        - **ErrorLog / ManualLog** – stopped with an issue; these leave
+          `Processing` set and need a look before retrying
+
+        Want the full breakdown? Ask me and I'll pull it from the knowledge base.
+```
+
+---
+
+## 5. Out of Scope / Back to Concierge
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - common drive
+      - shared drive
+      - file share
+      - sp site
+      - sharepoint server
+      - mailbox
+      - back
+      - concierge
+      - different scenario
+  actions:
+    - kind: SendActivity
+      id: oosMsg
+      activity: |-
+        That's outside my lane — I only handle the **H: Drive → OneDrive** move.
+        Head back to the **Concierge** and it'll route you to the right
+        specialist.
+```
+
+---
+
+## 6. Fallback
+
+Paste into the existing "Fallback" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnUnknownIntent
+  id: main
+  actions:
+    - kind: SendActivity
+      id: fbMsg
+      activity: |-
+        I'm focused on moving your **personal H: home drive into OneDrive**. If
+        your question is about that, ask away — for anything else, the
+        **Concierge** can point you to the right specialist.
+```
+</content>

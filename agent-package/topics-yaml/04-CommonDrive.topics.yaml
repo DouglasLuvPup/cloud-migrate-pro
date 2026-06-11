@@ -1,0 +1,262 @@
+# Common Drive → Teams/SPO — topic definitions
+
+Agent: **Common Drive → Teams/SharePoint Migration** (bot `32433b33-e564-f111-a826-000d3a5a0da1`)
+
+---
+
+## 1. Conversation Start
+
+Paste into the existing "Conversation Start" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnConversationStart
+  id: main
+  actions:
+    - kind: SendActivity
+      id: introMsg
+      activity: |-
+        📁 **Common Drive → SPO Migration Specialist**
+
+        I cover the 2026 playbook: a shared team/department drive into Microsoft
+        365 — either as a **Microsoft Teams channel folder**, or directly into a
+        **SharePoint site**. Which target are you on?
+    - kind: Question
+      id: qFlow
+      alwaysPrompt: false
+      variable: Global.CDFlow
+      prompt: "Pick your target:"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: Channel
+            displayName: 🟪 Teams channel folder
+          - id: SiteOnly
+            displayName: 🟦 SharePoint site (no Team)
+          - id: Compare
+            displayName: 🤔 Compare the two
+    - kind: ConditionGroup
+      id: routeFlow
+      conditions:
+        - id: cChannel
+          condition: =Global.CDFlow = "Channel"
+          actions:
+            - kind: BeginDialog
+              id: goA
+              dialog: topic.FlowAOverview
+        - id: cSite
+          condition: =Global.CDFlow = "SiteOnly"
+          actions:
+            - kind: BeginDialog
+              id: goB
+              dialog: topic.FlowBOverview
+        - id: cCompare
+          condition: =Global.CDFlow = "Compare"
+          actions:
+            - kind: BeginDialog
+              id: goCmp
+              dialog: topic.FlowComparison
+```
+
+---
+
+## 2. Flow A Overview (Teams channel)
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - teams channel
+      - channel folder
+      - team site
+      - microsoft teams
+  actions:
+    - kind: SendActivity
+      id: flowAMsg
+      activity: |-
+        **Flow A: shared drive → Teams channel folder**
+
+        The pipeline resolves your Team and channel, auto-creates the channel
+        folder, grants the service account access, scans the source, runs the
+        copy with SPMT, then builds a status dashboard and a landing page.
+
+        Ask me about the **workflow**, **prereqs**, a **sample call**, the **list
+        columns**, **migration states**, **scheduling**, **storage downgrade**,
+        the **two-phase setup**, **advanced parameters**, **errors**, or **scale**
+        — I'll answer from my knowledge base.
+```
+
+---
+
+## 3. Flow B Overview (SharePoint site only)
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - spo site
+      - site only
+      - no team
+      - direct to site
+      - no channel
+  actions:
+    - kind: SendActivity
+      id: flowBMsg
+      activity: |-
+        **Flow B: shared drive → SharePoint site (no Team)**
+
+        Same pipeline as Flow A, but the Team/channel setup step is **skipped**
+        — there's no Team to resolve. The storage check and service-account
+        access grant still run, then staging, scheduling, and the copy are
+        identical to Flow A.
+
+        Ask me about the **workflow**, **prereqs**, a **sample call**, the **list
+        columns**, **migration states**, **scheduling**, or **scale** — I'll pull
+        it from my knowledge base.
+```
+
+---
+
+## 4. Flow Comparison
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - compare
+      - difference
+      - which flow
+      - teams or sharepoint
+  actions:
+    - kind: SendActivity
+      id: cmpMsg
+      activity: |-
+        | | 🟪 Teams channel | 🟦 SharePoint site |
+        |---|---|---|
+        | Best when | The team already works in Teams | People browse to a document library |
+        | Setup | Resolves Team + channel, auto-creates the folder | Goes straight to the site |
+        | Result | Files land in a Teams channel's Files tab | Files land in a SharePoint library |
+
+        Not sure? Tell me how your team works day-to-day and I'll recommend one.
+    - kind: Question
+      id: qPick
+      alwaysPrompt: true
+      variable: Global.CDFlow
+      prompt: "Which target fits?"
+      entity:
+        kind: ClosedListEntity
+        items:
+          - id: Channel
+            displayName: Teams channel folder
+          - id: SiteOnly
+            displayName: SharePoint site
+    - kind: ConditionGroup
+      id: routePick
+      conditions:
+        - id: pChannel
+          condition: =Global.CDFlow = "Channel"
+          actions:
+            - kind: BeginDialog
+              id: goA2
+              dialog: topic.FlowAOverview
+        - id: pSite
+          condition: =Global.CDFlow = "SiteOnly"
+          actions:
+            - kind: BeginDialog
+              id: goB2
+              dialog: topic.FlowBOverview
+```
+
+---
+
+## 5. Scheduling
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - scheduling
+      - time zone
+      - after hours
+      - weekend
+      - holiday
+      - migration window
+      - priority
+  actions:
+    - kind: SendActivity
+      id: schedMsg
+      activity: |-
+        With scheduling on, moves run inside safe windows:
+
+        - **Weekdays** 5pm–6am (in the row's time zone)
+        - **Weekends** and **U.S. federal holidays** — any time
+        - Mark a row **ExtendedHours = Yes** to bypass the window
+        - Large jobs (≥ 10 GB) run weekends/holidays only unless ExtendedHours
+        - **Priority 1** runs first; ties break in first-queued order
+
+        Want time-zone codes or the exact switches? Ask and I'll pull them.
+```
+
+---
+
+## 6. Out of Scope / Back to Concierge
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - h drive
+      - home drive
+      - personal drive
+      - mysite
+      - on-prem site
+      - sharepoint server
+      - mailbox
+      - back
+      - concierge
+      - different scenario
+  actions:
+    - kind: SendActivity
+      id: oosMsg
+      activity: |-
+        That's outside my lane — I only handle **shared common drives → Teams or
+        SharePoint**. Head back to the **Concierge** and it'll route you to the
+        right specialist.
+```
+
+---
+
+## 7. Fallback
+
+Paste into the existing "Fallback" system topic.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnUnknownIntent
+  id: main
+  actions:
+    - kind: SendActivity
+      id: fbMsg
+      activity: |-
+        I'm focused on moving a **shared common drive into Teams or SharePoint**.
+        If your question is about that, ask away — for anything else, the
+        **Concierge** can point you to the right specialist.
+```
+</content>

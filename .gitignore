@@ -1,0 +1,17 @@
+# Never publish the de-anonymization mapping table or any variant of it
+_scrub.ps1
+*_scrub.ps1
+scrub-map*
+*scrub-map*
+
+# Never publish raw Copilot Studio solution exports — they contain
+# botcomponents/.../filedata/ copies of all knowledge files which may
+# pre-date sanitization.
+CloudMigratePro_*.zip
+*.solution.zip
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/

@@ -53,14 +53,14 @@ flowchart TD
     Buckets --> Flow{Flow A Team/Channel<br/>OR Flow B direct SPO site?}
     Flow -->|Flow A| P1[Update-MigrationTargets.v2.ps1<br/>PHASE 1 - mostly app-only Graph]
     P1 --> Find[Find-TeamByName<br/>Find-ChannelByName<br/>Get-TeamSiteUrl via /groups/id/sites/root]
-    Find --> Own[Add-TeamGroupOwner<br/>app-only adds svc-filemanager<br/>as M365 Group Owner]
-    Own --> ProvF[Get-ChannelFilesFolder<br/>DELEGATED auth only path<br/>USSec workaround<br/>5x retry x 30s]
+    Find --> Own[Add-TeamGroupOwner<br/>app-only adds svc-migration<br/>as M365 Group Owner]
+    Own --> ProvF[Get-ChannelFilesFolder<br/>DELEGATED auth only path<br/>sovereign/IL6 workaround<br/>5x retry x 30s]
     ProvF --> P2
     Flow -->|Flow B| P2
     P2[Update-MigrationTargets.v2.ps1<br/>PHASE 2 - app-only SPO Admin]
     P2 --> Quota[Read StorageQuota, StorageUsed<br/>compute StorageAvailable<br/>stamp LastChecked - GATING FIELD]
     Quota --> Opt[Get-OptimalYearCutoff<br/>try 7yr fits? -> else 5yr -> else 3yr<br/>10 pct safety buffer<br/>stamp YearUsed]
-    Opt --> SCA[Grant-SitePermission<br/>svc-filemanager as Site Collection Admin<br/>via Set-PnPTenantSite]
+    Opt --> SCA[Grant-SitePermission<br/>svc-migration as Site Collection Admin<br/>via Set-PnPTenantSite]
     SCA --> Ready[Operator flips Migrate column:<br/>Stage / MigrateOnly / Migrate]
     Ready --> Orch[CommonDriveMigration.v2.ps1<br/>orchestrator<br/>-Continuous -MaxRuntime<br/>-AppClientIdParam multi-instance]
     Orch --> Pick[Get-SPOListItems<br/>sort by Priority then QueuedAt FIFO<br/>filter where LastChecked set]
@@ -108,7 +108,7 @@ flowchart TD
         <tbody>
           <tr><td>1. Source import</td><td><code>Import-MigrationSources.ps1</code></td><td>CSV of UNC paths → SPO list, enumerate subfolders, create per-DIV filtered views, dedupe. <code>Migrate</code> starts blank.</td></tr>
           <tr><td>2. Storage scan</td><td><code>Invoke-UNCStorageScan-v2.ps1</code></td><td>Multi-server claim-locked parallel scan. Buckets file ages into 3 / 5 / 7-year totals and stamps row.</td></tr>
-          <tr><td>3a. Target resolve (Flow A)</td><td><code>Update-MigrationTargets.v2.ps1</code> Phase 1</td><td>Graph (mostly app-only) — find Team + Channel, add <code>svc-filemanager</code> as M365 Group Owner, trigger channel folder provisioning via one delegated call (USSec workaround).</td></tr>
+          <tr><td>3a. Target resolve (Flow A)</td><td><code>Update-MigrationTargets.v2.ps1</code> Phase 1</td><td>Graph (mostly app-only) — find Team + Channel, add <code>svc-migration</code> as M365 Group Owner, trigger channel folder provisioning via one delegated call (sovereign/IL6 workaround).</td></tr>
           <tr><td>3b. Quota + SCA</td><td><code>Update-MigrationTargets.v2.ps1</code> Phase 2</td><td>App-only SPO Admin — read quota/used, compute <code>StorageAvailable</code>, stamp <code>LastChecked</code> (the gating field), grant SCA.</td></tr>
           <tr><td>4. Year-cutoff fit</td><td><code>Get-OptimalYearCutoff</code> (in orchestrator)</td><td>Try 7 → 5 → 3 years to fit <code>StorageAvailable</code> with a 10% safety buffer; stamp chosen horizon as <code>YearUsed</code>.</td></tr>
           <tr><td>5. Operator handoff</td><td>(manual)</td><td>Operator flips <code>Migrate</code> column to <code>Stage</code>, <code>MigrateOnly</code>, or <code>Migrate</code>.</td></tr>
