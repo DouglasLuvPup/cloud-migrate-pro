@@ -34,7 +34,7 @@ body{font-family:"Segoe UI",Aptos,Calibri,-apple-system,BlinkMacSystemFont,sans-
 .wrap{max-width:1180px;margin:0 auto;padding:0 24px;}
 
 /* HERO */
-.hero{position:relative;padding:96px 0 84px;overflow:hidden;isolation:isolate;}
+.hero{position:relative;padding:40px 0 72px;overflow:hidden;isolation:isolate;}
 .hero-bg{position:absolute;inset:-40% -20% auto -20%;height:170%;z-index:-2;background:
  radial-gradient(42% 55% at 18% 22%,var(--cp-highlight) 0%,transparent 60%),
  radial-gradient(38% 50% at 82% 18%,var(--cp-accent-soft) 0%,transparent 62%),
@@ -81,13 +81,13 @@ h1.title{font-size:clamp(2.6rem,6vw,4.4rem);line-height:1.04;letter-spacing:-.02
 .path:hover::before{transform:scaleX(1);}
 .path .ico{width:56px;height:56px;border-radius:14px;display:grid;place-items:center;font-size:1.7rem;background:var(--cp-accent-soft);margin-bottom:18px;}
 .path .flow{font-size:.74rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--cp-accent);margin-bottom:8px;}
-.path h3{font-size:1.28rem;font-weight:750;margin-bottom:6px;line-height:1.2;}
-.path .route{font-size:.9rem;color:var(--cp-text-soft);font-family:Consolas,"Courier New",monospace;margin-bottom:18px;display:block;}
-.path ul{list-style:none;display:flex;flex-direction:column;gap:12px;margin-bottom:20px;}
-.path li{position:relative;padding-left:26px;font-size:.93rem;color:var(--cp-text-muted);}
+.path h3{font-size:1.32rem;font-weight:750;margin-bottom:6px;line-height:1.2;}
+.path .route{font-size:.88rem;color:var(--cp-text-soft);font-family:Consolas,"Courier New",monospace;margin-bottom:22px;display:block;line-height:1.4;}
+.path ul{list-style:none;display:flex;flex-direction:column;gap:16px;margin-bottom:22px;}
+.path li{position:relative;padding-left:28px;font-size:.95rem;line-height:1.55;color:var(--cp-text-muted);}
 .path li b{color:var(--cp-text);font-weight:650;}
-.path li::before{content:"";position:absolute;left:0;top:7px;width:14px;height:14px;border-radius:4px;background:var(--cp-accent-soft);border:1.5px solid var(--cp-accent);}
-.path li::after{content:"";position:absolute;left:4.5px;top:10px;width:4px;height:7px;border:solid var(--cp-accent);border-width:0 2px 2px 0;transform:rotate(45deg);}
+.path li::before{content:"";position:absolute;left:0;top:6px;width:14px;height:14px;border-radius:4px;background:var(--cp-accent-soft);border:1.5px solid var(--cp-accent);}
+.path li::after{content:"";position:absolute;left:4.5px;top:9px;width:4px;height:7px;border:solid var(--cp-accent);border-width:0 2px 2px 0;transform:rotate(45deg);}
 .path .tags{margin-top:auto;display:flex;flex-wrap:wrap;gap:7px;}
 .path .tag{font-size:.74rem;font-weight:600;color:var(--cp-text-soft);background:var(--cp-surface-soft);border:1px solid var(--cp-border);padding:5px 10px;border-radius:999px;}
 
@@ -105,7 +105,7 @@ code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var
 .brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.01em;color:var(--cp-text);font-size:1.02rem;}
 .brand .logo{width:30px;height:30px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 8px var(--cp-highlight);overflow:hidden;}
 .brand .logo img{width:100%;height:100%;object-fit:cover;display:block;}
-.hero-logo{display:block;width:min(380px,78%);height:auto;margin:0 0 28px;animation:rise .7s both;}
+.hero-logo{display:block;width:min(380px,78%);height:auto;margin:0 0 18px;animation:rise .7s both;}
 .navlinks{display:flex;gap:6px;flex-wrap:wrap;}
 .navlinks a{font-size:.92rem;font-weight:600;color:var(--cp-text-muted);text-decoration:none;padding:8px 14px;border-radius:8px;transition:background .15s,color .15s;}
 .navlinks a:hover{background:var(--cp-accent-soft);color:var(--cp-accent);}
@@ -190,42 +190,39 @@ footer .v{color:var(--cp-text-muted);}
 
       <article class="path">
         <div class="ico">🏢</div>
-        <div class="flow">2024 Playbook</div>
         <h3>On-Prem → SharePoint Online</h3>
         <span class="route">on-prem SharePoint Server &amp; MySites → SPO + OneDrive</span>
         <ul>
-          <li><b>Two flows, one playbook</b> — <code>Migration-OD2OD-SPO.ps1</code> (MySites → SPO OneDrive) and <code>Migration-SP2SPO.ps1</code> (on-prem sites → SPO sites); covers SharePoint 2013 → Subscription Edition.</li>
-          <li><b>SPMT-driven, list-controlled</b> — pulls rows marked <b>Ready</b> from a customer-owned SPO driver list, then Register / Add / Start-SPMTMigration with both SPO and on-prem admin credentials.</li>
-          <li><b>Multi-runner safe</b> — a per-row lock flag (Inprocess / Processing) lets several servers run at once without ever double-processing an item.</li>
-          <li><b>SCA swap at cutover</b> — promotes a <b>dedicated migration service account</b> to Site Collection Admin and demotes the migrated user; optional AD <i>wwwHomePage</i> redirect to the new OneDrive.</li>
+          <li><b>Two flows in one playbook</b> — MySite → OneDrive (with full AD &amp; SCA cutover) and on-prem site → SPO site (content-only). Version history is preserved end-to-end and a configurable extension blocklist screens out risky file types.</li>
+          <li><b>List-controlled, multi-runner safe</b> — driven by a customer-owned SPO list; only rows the operator marks <i>Migrate</i> are picked up, and a per-row lock plus server-name stamp lets several servers run side-by-side without ever double-processing an item.</li>
+          <li><b>SCA swap + AD cutover</b> — promotes the migration service account to Site Collection Admin on the source MySite and demotes the user, redirects <i>wwwHomePage</i> to the new OneDrive URL, removes legacy redirection / OneDrive security groups, and adds the target Office 365 group.</li>
+          <li><b>Audit trail + user notifications</b> — every row gets <i>DateStarted</i>, <i>DateMigrated</i>, log path, and a final status (<i>Migrated</i> / <i>ErrorLog</i> / <i>Failed</i>); the SPMT failure summary is attached to the row, and a Power Automate flow emails the affected user automatically when errors are logged.</li>
         </ul>
         <div class="tags"><span class="tag">SP Server</span><span class="tag">MySites</span><span class="tag">OD2OD + SP2SPO</span></div>
       </article>
 
       <article class="path">
         <div class="ico">🏠</div>
-        <div class="flow">2025 Playbook</div>
         <h3>H: Drive → OneDrive</h3>
         <span class="route">UNC \\server\users\&lt;sam&gt; → OneDrive /Documents/HDrive</span>
         <ul>
-          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions via Request-SPOPersonalSite (3× backoff), then grants a dedicated migration service account.</li>
-          <li><b>AD group flips on success</b> — removes <b>SecFltr-USR-OneDrive</b>, adds <b>SecFltr-USR-Office365</b> + the license group; multi-group <i>RedirectGP</i> supported.</li>
-          <li><b>Postpone-by-date &amp; throttle-aware</b> — defer users by date (6 accepted spellings), DPAPI-cached creds, and SPO throttling auto-retry with backoff.</li>
-          <li><b>Source lockdown + reorg</b> — sets the H: source read-only in a background job and flattens <i>/My Documents</i> → <i>/Documents</i> after a verified move. Blocks <code>.pst</code>.</li>
+          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions the personal site with retry &amp; backoff, then grants the dedicated migration service account site-collection admin so SPMT can write.</li>
+          <li><b>AD-aware cutover</b> — stamps <i>wwwHomePage</i> to the new OneDrive URL and removes the user from every group listed on the row's redirection field (multi-group, comma- or newline-separated); license-group membership is validated up front so unlicensed users are skipped automatically.</li>
+          <li><b>Postpone-by-date &amp; throttle-aware</b> — operators can defer any user by date (multiple field-name spellings accepted), credentials are DPAPI-cached, and SPO 429 / 503 throttling triggers exponential backoff at every layer.</li>
+          <li><b>Source lockdown, reorg, and full audit</b> — a stage pre-pass copies content with no AD changes, the H: source is flipped read-only in a background job, <i>/My Documents</i> is flattened into <i>/Documents</i>, <code>.pst</code> is blocked, and per-item logs plus failure / fatal-error reports are attached to each SPO row for sign-off.</li>
         </ul>
         <div class="tags"><span class="tag">Per-user</span><span class="tag">AD-integrated</span><span class="tag">Hdrive script v5.2</span></div>
       </article>
 
       <article class="path">
         <div class="ico">📁</div>
-        <div class="flow">2026 Playbook</div>
         <h3>Common Drive → Teams / SharePoint</h3>
-        <span class="route">UNC shared drives → Teams channel or SPO site</span>
+        <span class="route">UNC shared drives → Teams channel folder or SPO site</span>
         <ul>
-          <li><b>Two target flows</b> — Flow A auto-provisions a Teams channel folder via Graph (two-phase <code>Update-MigrationTargets.v2.ps1</code>); Flow B goes straight into a SharePoint site.</li>
-          <li><b>Storage auto-downgrade</b> — <code>Invoke-UNCStorageScan</code> sizes 3/5/7-year footprints, then fits the destination quota by trimming 7 → 5 → 3 years (horizon stamped in YearUsed).</li>
-          <li><b>Timezone-aware scheduling</b> — per-row windows: weekday nights, weekends &amp; US federal holidays; rows ≥ 10 GB held to weekends unless ExtendedHours.</li>
-          <li><b>6+ server scale</b> — multi-server claim locking (ClaimedBy / ClaimedAt / stale-release); <code>Retry-FailedMigration</code> reprocesses failed items and 0-byte uploads.</li>
+          <li><b>Two target flows</b> — Flow A resolves a Team + Channel to its SPO URL via Graph (app-only), pre-grants Group Owner + Site Collection Admin, and stamps storage quota / used / available so the engine knows the row will fit before it runs. Flow B targets a SharePoint site directly.</li>
+          <li><b>Storage auto-downgrade</b> — a parallel single-pass UNC scan sizes 3 / 5 / 7-year footprints, then auto-trims the migration horizon (7 → 5 → 3 years) to fit the destination quota with a safety buffer; the chosen horizon is stamped on the row.</li>
+          <li><b>Timezone-aware scheduling</b> — per-row windows block daytime business hours and allow nights, weekends, and US federal holidays in the row's local time; large rows (≥ 10 GB) are held to weekends/holidays unless explicitly opted into extended hours.</li>
+          <li><b>6+ server scale, post-migration cleanup, and reporting</b> — atomic multi-server claim locking with stale-release across scan, target, and migrate; ACLs are flipped to read-only and the source is deleted with a per-row deletion report; an HTML pipeline dashboard summarises progress by division for leadership.</li>
         </ul>
         <div class="tags"><span class="tag">Flow A</span><span class="tag">Flow B</span><span class="tag">CommonDriveMigration.v2</span></div>
       </article>
