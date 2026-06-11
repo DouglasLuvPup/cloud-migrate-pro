@@ -169,8 +169,8 @@ footer .v{color:var(--cp-text-muted);}
     <a class="brand" href="#top" aria-label="Cloud Migrate Pro home"><span class="logo"><img src="cloud-migrate-pro-logo-icon-192.png" alt=""></span><span>Cloud Migrate Pro</span></a>
     <div class="navlinks">
       <a href="#paths">Playbooks</a>
-      <a class="cta" href="#diagrams">📊 Flow Diagrams</a>
-      <a href="#concierge">AI Concierge</a>
+      <a href="#diagrams">Flow Diagrams</a>
+      <a class="cta" href="#concierge">🤖 AI Concierge</a>
     </div>
   </div>
 </nav>
@@ -180,23 +180,43 @@ footer .v{color:var(--cp-text-muted);}
   <div class="orb a"></div>
   <div class="orb b"></div>
   <div class="wrap">
-    <span class="eyebrow"><span class="pulse-dot"></span> Migration Concierge · AI Agent</span>
-    <h1 class="title">Move it to the cloud,<br><span class="grad">the right way.</span></h1>
-    <p class="lede">Cloud Migrate Pro is your front door to three battle-tested migration playbooks — SharePoint, OneDrive, and shared drives — orchestrated by sanitized PowerShell on Microsoft's free SPMT engine. Tell the AI Concierge what you're moving; it routes you to the right specialist.</p>
+    <span class="eyebrow"><span class="pulse-dot"></span> AI Agent · Powered by Microsoft Copilot Studio</span>
+    <h1 class="title">An AI Concierge for<br><span class="grad">cloud migration.</span></h1>
+    <p class="lede">Tell the AI Concierge what you're moving — SharePoint sites, OneDrive, file shares — and it picks the right playbook, walks you through the workflow, and generates the exact PowerShell to run. A conversational AI agent on top of three battle-tested migration playbooks.</p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="#concierge">💬 Talk to the Concierge</a>
+      <a class="btn btn-primary" href="#concierge">💬 Talk to the AI Concierge</a>
       <a class="btn btn-ghost" href="#paths">Explore the playbooks ↓</a>
     </div>
     <div class="badges">
+      <span class="badge">🤖 <b>Conversational AI</b> agent</span>
+      <span class="badge">📜 <b>Generates</b> exact commands</span>
       <span class="badge">🛡️ <b>IL5 + IL6</b> native</span>
-      <span class="badge">🔁 <b>Portable</b> to commercial</span>
-      <span class="badge">💸 <b>$0</b> license cost</span>
-      <span class="badge">📜 <b>PowerShell</b>, git-diffable</span>
+      <span class="badge">💸 <b>$0</b> added license cost</span>
     </div>
   </div>
 </header>
 
-<section class="section" id="paths">
+<section class="section" id="concierge">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Live AI Concierge</div>
+      <h2>Ask it anything — right here</h2>
+      <p>The agent runs on Microsoft Copilot Studio. Describe what you're migrating, ask it to compare playbooks, or type <b>“help me decide.”</b></p>
+    </div>
+    <div class="chat-shell">
+      <div class="chat-bar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="label">Cloud Migrate Pro AI Concierge</span>
+        <span class="live"><span class="pulse-dot"></span> Live</span>
+      </div>
+      <iframe class="chat-frame" title="Cloud Migrate Pro Concierge"
+        src="https://copilotstudio.microsoft.com/environments/89e4745f-bb2a-eb7b-ab1b-ca02b2e5e604/bots/crcce_CloudMigrateProConcierge/webchat?__version__=2"
+        allow="microphone; clipboard-write"></iframe>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="paths">
   <div class="wrap">
     <div class="section-head">
       <div class="kicker">Three Playbooks</div>
@@ -248,28 +268,28 @@ footer .v{color:var(--cp-text-muted);}
   </div>
 </section>
 
-<section class="section alt">
+<section class="section">
   <div class="wrap">
     <div class="section-head">
       <div class="kicker">Built In, Across Every Playbook</div>
-      <h2>Sovereign by design, portable by default</h2>
+      <h2>Designed for regulated environments</h2>
       <p>These are the foundations every playbook shares — the reasons they're trusted in the most regulated environments in the world.</p>
     </div>
     <div class="feat-grid">
       <div class="feat">
         <div class="fi">🌐</div>
-        <h4>Sovereign-cloud native — commercial-ready</h4>
-        <p>One codebase runs in <b>IL5 (GCC-High / DoD)</b>, <b>IL6 (microsoft.scloud)</b>, and <b>commercial M365</b> — change the host suffix, not the script. Built where the regulated work lives, portable everywhere else.</p>
+        <h4>One codebase, every Microsoft cloud</h4>
+        <p>The same scripts run unchanged in <b>IL5</b>, <b>IL6</b>, and <b>commercial Microsoft 365</b>. Built first for the most regulated environments and deployable in any tenant on any cloud Microsoft sells — without forks, without rewrites, without separate "federal" and "commercial" editions to maintain.</p>
       </div>
       <div class="feat">
         <div class="fi">🔐</div>
-        <h4>Audit logging in every run</h4>
-        <p>Every item lands in a <b>customer-owned SharePoint list</b> with start time, end time, log path, and a categorized status (<i>Migrated</i>, <i>ErrorLog</i>, <i>Failed</i>). Per-file CSV reports attach to each row, and transcript logs land in a flat folder on disk. Every line is <b>PowerShell you can diff in git</b> — no opaque binaries, no vendor cloud in the path.</p>
+        <h4>Every action audited, every step logged</h4>
+        <p>Every script run writes a transcript to disk. Every row in the migration list captures <b>start time, end time, log path, and final status</b>. Per-file CSV reports attach directly to the row that produced them. Live <b>HTML dashboards in SharePoint Online</b> surface progress, errors, and per-division pipelines for leadership review — no separate reporting tool, no exports to chase, no vendor portal in the path.</p>
       </div>
       <div class="feat">
         <div class="fi">💸</div>
-        <h4>Zero license cost</h4>
-        <p>The migration engine is <b>Microsoft's SPMT</b> — free, supported, and already in your tenant. The orchestration, scheduling, dashboards, and AD cutover are <b>owned IP</b> that ships with the playbooks. <b>No per-seat fees, no per-GB fees, no third-party cloud</b> to license.</p>
+        <h4>Zero added license cost</h4>
+        <p>The migration engine is the <b>Microsoft SharePoint Migration Tool (SPMT)</b> — Microsoft-supported and already approved in your tenant. Orchestration runs on <b>PowerShell</b>, all state lives in <b>SharePoint Online</b> lists you already own, all logs land on disk you already have. <b>Every component is part of your existing Microsoft 365 entitlement</b> — no per-seat fees, no per-GB fees, no third-party SaaS to license, contract, or get re-approved.</p>
       </div>
     </div>
   </div>
@@ -365,26 +385,6 @@ flowchart TD
       </div>
       <p class="dcap">Common Drive → Teams channel or SPO site · CommonDriveMigration.v2.ps1</p>
       <a class="detail-link" href="workflows/common.html">📄 Open detailed workflow →</a>
-    </div>
-  </div>
-</section>
-
-<section class="section" id="concierge">
-  <div class="wrap">
-    <div class="section-head">
-      <div class="kicker">Live Concierge</div>
-      <h2>Not sure which one fits?</h2>
-      <p>Ask right here. Describe what you're migrating, or type <b>“help me decide.”</b></p>
-    </div>
-    <div class="chat-shell">
-      <div class="chat-bar">
-        <span class="dots"><i></i><i></i><i></i></span>
-        <span class="label">Cloud Migrate Pro Concierge</span>
-        <span class="live"><span class="pulse-dot"></span> Live</span>
-      </div>
-      <iframe class="chat-frame" title="Cloud Migrate Pro Concierge"
-        src="https://copilotstudio.microsoft.com/environments/89e4745f-bb2a-eb7b-ab1b-ca02b2e5e604/bots/crcce_CloudMigrateProConcierge/webchat?__version__=2"
-        allow="microphone; clipboard-write"></iframe>
     </div>
   </div>
 </section>
