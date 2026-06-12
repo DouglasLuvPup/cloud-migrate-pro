@@ -49,11 +49,6 @@ body{font-family:"Segoe UI",Aptos,Calibri,-apple-system,BlinkMacSystemFont,sans-
 .orb.b{width:220px;height:220px;bottom:-6%;left:1%;animation-delay:-5s;}
 @keyframes float{0%,100%{transform:translateY(0) translateX(0);}50%{transform:translateY(-30px) translateX(16px);}}
 .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--cp-accent);background:var(--cp-accent-soft);border:1px solid var(--cp-accent-soft);padding:7px 14px;border-radius:999px;margin-bottom:22px;animation:rise .7s both;}
-.built-with{display:inline-flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:22px;animation:rise .7s both;}
-.bw-label{display:inline-flex;align-items:center;gap:8px;font-size:.74rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--cp-accent);padding:4px 6px 4px 0;}
-.bw-chip{display:inline-flex;align-items:center;gap:7px;font-size:.78rem;font-weight:600;letter-spacing:.01em;color:var(--cp-text);background:var(--cp-surface);border:1px solid var(--cp-border);padding:6px 12px 6px 10px;border-radius:999px;text-decoration:none;transition:transform .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}
-.bw-chip:hover{transform:translateY(-2px);border-color:var(--cp-accent);color:var(--cp-accent);box-shadow:0 6px 18px var(--cp-highlight);}
-.bw-ico{width:15px;height:15px;flex-shrink:0;color:var(--cp-accent);}
 .pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--cp-accent);animation:pulse 2s infinite;}
 @keyframes pulse{0%{box-shadow:0 0 0 0 var(--cp-highlight);}70%{box-shadow:0 0 0 12px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
 h1.title{font-size:clamp(2.6rem,6vw,4.4rem);line-height:1.04;letter-spacing:-.02em;font-weight:800;margin-bottom:20px;animation:rise .7s .05s both;}
@@ -159,21 +154,7 @@ footer .v{color:var(--cp-text-muted);}
   <div class="orb a"></div>
   <div class="orb b"></div>
   <div class="wrap">
-    <div class="built-with">
-      <span class="bw-label"><span class="pulse-dot"></span> Built with</span>
-      <a class="bw-chip" href="https://copilotstudio.microsoft.com/" target="_blank" rel="noopener" title="Microsoft Copilot Studio — runs the agent">
-        <svg class="bw-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2l1.9 5.4L19 9l-5.1 1.6L12 16l-1.9-5.4L5 9l5.1-1.6L12 2zm7.5 11l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6z"/></svg>
-        Copilot Studio
-      </a>
-      <a class="bw-chip" href="https://github.com/features/copilot" target="_blank" rel="noopener" title="GitHub Copilot in VS Code — paired on the scripts, site, and prompts">
-        <svg class="bw-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.4 2.6 8.9 11.1 3.6 7 1.5 8.7l4.8 3.3-4.8 3.3L3.6 17l5.3-4.1 12.5 8.5V2.6zm-2.4 5.8v7.2L13 12l6-3.6z"/></svg>
-        GitHub Copilot in VS Code
-      </a>
-      <span class="bw-chip" title="Microsoft Scout — AI build &amp; research companion" style="cursor:default;">
-        <svg class="bw-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="currentColor" d="M12 5.5 14 11l-2 1.5L10 11 12 5.5zm0 13L10 13l2-1.5L14 13 12 18.5z"/></svg>
-        Microsoft Scout
-      </span>
-    </div>
+    <span class="eyebrow"><span class="pulse-dot"></span> AI · Powered by Microsoft Copilot Studio, GitHub Copilot in VS Code, and Microsoft Scout</span>
     <h1 class="title">An AI guide to<br><span class="grad">three battle-tested playbooks.</span></h1>
     <p class="lede">Three production migration playbooks — already built, already running in commercial, GCC-High (IL5), and sovereign (IL6). The AI Concierge is a <strong>navigator</strong> for those playbooks: tell it what content you're moving — on-prem SharePoint libraries, network home drives, or shared file drives — and it picks the right playbook, walks you through that playbook's workflow step-by-step, explains key parameters and gotchas, and points you to the canonical scripts in the repo. It does not generate scripts, run migrations, or replace the playbook itself — it makes the existing work findable and explainable. <em>Content migration only — no site collection structure, no IA rebuilds.</em></p>
     <div class="cta-row">
