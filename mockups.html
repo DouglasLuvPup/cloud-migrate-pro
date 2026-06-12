@@ -31,7 +31,7 @@ html[data-theme="dark"]{
 *{box-sizing:border-box;margin:0;padding:0;}
 html{scroll-behavior:smooth;}
 body{font-family:"Segoe UI",Aptos,Calibri,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--cp-bg);color:var(--cp-text);line-height:1.55;}
-.wrap{max-width:1280px;margin:0 auto;padding:0 24px;}
+.wrap{max-width:1320px;margin:0 auto;padding:0 24px;}
 
 /* NAV */
 .topnav{position:sticky;top:0;z-index:50;background:color-mix(in oklab,var(--cp-bg) 88%,transparent);backdrop-filter:saturate(140%) blur(10px);border-bottom:1px solid var(--cp-border);}
@@ -55,7 +55,7 @@ h1.title{font-size:clamp(2.2rem,5vw,3.4rem);line-height:1.06;letter-spacing:-.02
 .lede{font-size:1.08rem;color:var(--cp-text-muted);max-width:880px;margin-bottom:16px;}
 .disclaim{display:inline-flex;align-items:center;gap:8px;font-size:.82rem;color:var(--cp-warning);background:color-mix(in oklab,var(--cp-warning) 12%,transparent);border:1px solid color-mix(in oklab,var(--cp-warning) 30%,transparent);padding:7px 14px;border-radius:999px;font-weight:600;}
 
-/* TABS (mockup switcher) */
+/* TABS */
 .section{padding:18px 0 20px;}
 .mtabs{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px;}
 .mtab{font-size:.92rem;font-weight:600;font-family:inherit;cursor:pointer;padding:11px 22px;border-radius:999px;border:1px solid var(--cp-border);background:var(--cp-surface);color:var(--cp-text-muted);transition:all .15s;}
@@ -64,14 +64,15 @@ h1.title{font-size:clamp(2.2rem,5vw,3.4rem);line-height:1.06;letter-spacing:-.02
 .mpanel{display:none;}
 .mpanel.active{display:block;animation:rise .35s both;}
 @keyframes rise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.source-note{font-size:.84rem;color:var(--cp-text-muted);margin-bottom:14px;}
+.source-note code{background:var(--cp-surface-soft);border:1px solid var(--cp-border);padding:1px 6px;border-radius:4px;font-size:.82rem;color:var(--cp-text);}
 
 /* ========== SHAREPOINT LIST MOCKUP ========== */
 .sp-frame{background:#f3f2f1;border:1px solid var(--cp-border);border-radius:12px;box-shadow:var(--cp-shadow);overflow:hidden;}
 html[data-theme="dark"] .sp-frame{background:#252423;}
 .sp-suiteBar{display:flex;align-items:center;gap:14px;background:#0078d4;color:#fff;padding:6px 16px;font-size:.82rem;font-weight:600;}
-.sp-suiteBar .waffle{display:inline-flex;flex-direction:column;gap:2px;}
-.sp-suiteBar .waffle i{width:3px;height:3px;background:#fff;border-radius:1px;display:block;}
 .sp-suiteBar .waffle{display:grid;grid-template-columns:repeat(3,3px);gap:2px;}
+.sp-suiteBar .waffle i{width:3px;height:3px;background:#fff;border-radius:1px;display:block;}
 .sp-suiteBar .m365{font-weight:700;letter-spacing:.01em;}
 .sp-suiteBar .spacer{flex:1;}
 .sp-suiteBar .search{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.2);border-radius:4px;padding:4px 10px;font-size:.78rem;color:#fff;width:240px;}
@@ -98,147 +99,187 @@ html[data-theme="dark"] .sp-cmdBtn:hover{background:#3b3a39;}
 .sp-cmdBar .spacer{flex:1;}
 .sp-viewSel{font-size:.82rem;color:#323130;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid transparent;border-radius:4px;}
 html[data-theme="dark"] .sp-viewSel{color:#f3f2f1;}
-.sp-viewSel:hover{background:#f3f2f1;}
-html[data-theme="dark"] .sp-viewSel:hover{background:#3b3a39;}
 
 .sp-listWrap{background:#fff;overflow-x:auto;}
 html[data-theme="dark"] .sp-listWrap{background:#1f1e1d;}
-.sp-list{width:100%;border-collapse:collapse;font-size:.82rem;min-width:1500px;}
-.sp-list thead th{background:#fff;color:#323130;font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid #edebe9;position:sticky;top:0;white-space:nowrap;font-size:.78rem;}
+.sp-list{width:100%;border-collapse:collapse;font-size:.8rem;min-width:2200px;}
+.sp-list thead th{background:#fff;color:#323130;font-weight:600;text-align:left;padding:10px 10px;border-bottom:1px solid #edebe9;position:sticky;top:0;white-space:nowrap;font-size:.76rem;}
 html[data-theme="dark"] .sp-list thead th{background:#1f1e1d;color:#f3f2f1;border-bottom-color:#3b3a39;}
 .sp-list thead th .sort{color:#a19f9d;margin-left:6px;font-size:.7rem;}
 .sp-list tbody tr{border-bottom:1px solid #f3f2f1;transition:background .1s;}
 html[data-theme="dark"] .sp-list tbody tr{border-bottom-color:#3b3a39;}
 .sp-list tbody tr:hover{background:#f3f9fd;}
 html[data-theme="dark"] .sp-list tbody tr:hover{background:#2a2826;}
-.sp-list td{padding:9px 12px;color:#323130;vertical-align:middle;white-space:nowrap;}
+.sp-list td{padding:9px 10px;color:#323130;vertical-align:middle;white-space:nowrap;}
 html[data-theme="dark"] .sp-list td{color:#f3f2f1;}
 .sp-list td.num{text-align:right;font-variant-numeric:tabular-nums;color:#605e5c;}
 html[data-theme="dark"] .sp-list td.num{color:#a19f9d;}
-.sp-list td.path{font-family:Consolas,"Courier New",monospace;font-size:.78rem;color:#605e5c;max-width:240px;overflow:hidden;text-overflow:ellipsis;}
-html[data-theme="dark"] .sp-list td.path{color:#a19f9d;}
-.sp-list td .uname{color:#0078d4;}
+.sp-list td.path,.sp-list td.url{font-family:Consolas,"Courier New",monospace;font-size:.76rem;color:#605e5c;max-width:260px;overflow:hidden;text-overflow:ellipsis;}
+html[data-theme="dark"] .sp-list td.path,html[data-theme="dark"] .sp-list td.url{color:#a19f9d;}
+.sp-list td.url a{color:#0078d4;text-decoration:none;}
+.sp-list td.mono{font-family:Consolas,"Courier New",monospace;font-size:.74rem;color:#605e5c;}
+html[data-theme="dark"] .sp-list td.mono{color:#a19f9d;}
+.sp-list td.dim{color:#a19f9d;}
 
-/* state chips */
-.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:12px;font-size:.74rem;font-weight:600;line-height:1;}
+/* Migrate state chips — colors exactly mirror the dashboard PowerShell hexes */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:12px;font-size:.74rem;font-weight:600;line-height:1;white-space:nowrap;}
 .chip::before{content:"";width:6px;height:6px;border-radius:50%;}
 .chip-blank{background:#f3f2f1;color:#605e5c;}
 .chip-blank::before{background:#a19f9d;}
-.chip-ready{background:#deecf9;color:#004578;}
-.chip-ready::before{background:#0078d4;}
-.chip-stage{background:#fff4ce;color:#8a6500;}
-.chip-stage::before{background:#dbab19;}
-.chip-staged{background:#fdf6c2;color:#65541d;}
-.chip-staged::before{background:#bb952c;}
-.chip-stagedErr{background:#fed9cc;color:#7d3221;}
-.chip-stagedErr::before{background:#d63b22;}
-.chip-migrating{background:#cce5ff;color:#003a8c;}
-.chip-migrating::before{background:#0050b3;animation:blink 1.4s infinite;}
+.chip-stage{background:#fff8e6;color:#a25400;}
+.chip-stage::before{background:#fd7e14;}
+.chip-staged{background:#fff3cd;color:#7a4d00;}
+.chip-staged::before{background:#e65100;}
+.chip-stagedErr{background:#fde7e9;color:#a4262c;}
+.chip-stagedErr::before{background:#dc3545;}
+.chip-stageFail{background:#fde7e9;color:#7a181f;}
+.chip-stageFail::before{background:#a4262c;}
+.chip-migrate{background:#e7f1ff;color:#003a8c;}
+.chip-migrate::before{background:#007bff;}
+.chip-migrating{background:#fff3cd;color:#5a2700;}
+.chip-migrating::before{background:#e65100;animation:blink 1.4s infinite;}
 @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
-.chip-migrated{background:#dff6dd;color:#0e6b18;}
-.chip-migrated::before{background:#107c10;}
-.chip-errorLog{background:#fdf2c0;color:#86571b;}
-.chip-errorLog::before{background:#deac0d;}
-.chip-failed{background:#fde7e9;color:#a4262c;}
-.chip-failed::before{background:#a4262c;}
+.chip-migrated{background:#d4edda;color:#0e6b18;}
+.chip-migrated::before{background:#28a745;}
+.chip-migErr{background:#fff3cd;color:#86571b;}
+.chip-migErr::before{background:#ffc107;}
+.chip-failed{background:#f8d7da;color:#7a181f;}
+.chip-failed::before{background:#dc3545;}
 .chip-tz{background:var(--cp-surface-soft);color:var(--cp-text-muted);border:1px solid var(--cp-border);}
 .chip-tz::before{display:none;}
 html[data-theme="dark"] .chip-blank{background:#3b3a39;color:#c8c6c4;}
-html[data-theme="dark"] .chip-ready{background:rgba(0,120,212,.22);color:#9bcdfb;}
-html[data-theme="dark"] .chip-stage{background:rgba(219,171,25,.22);color:#fce99c;}
-html[data-theme="dark"] .chip-staged{background:rgba(187,149,44,.22);color:#fce99c;}
-html[data-theme="dark"] .chip-stagedErr{background:rgba(214,59,34,.22);color:#fcb8a5;}
-html[data-theme="dark"] .chip-migrating{background:rgba(0,80,179,.28);color:#9bcdfb;}
-html[data-theme="dark"] .chip-migrated{background:rgba(16,124,16,.22);color:#a3e3a3;}
-html[data-theme="dark"] .chip-errorLog{background:rgba(222,172,13,.22);color:#fce99c;}
-html[data-theme="dark"] .chip-failed{background:rgba(164,38,44,.22);color:#fbabaf;}
+html[data-theme="dark"] .chip-stage{background:rgba(253,126,20,.22);color:#ffb380;}
+html[data-theme="dark"] .chip-staged{background:rgba(230,81,0,.22);color:#ffaa70;}
+html[data-theme="dark"] .chip-stagedErr{background:rgba(220,53,69,.22);color:#fbabaf;}
+html[data-theme="dark"] .chip-stageFail{background:rgba(164,38,44,.30);color:#fbabaf;}
+html[data-theme="dark"] .chip-migrate{background:rgba(0,123,255,.22);color:#9bcdfb;}
+html[data-theme="dark"] .chip-migrating{background:rgba(230,81,0,.22);color:#ffaa70;}
+html[data-theme="dark"] .chip-migrated{background:rgba(40,167,69,.22);color:#a3e3a3;}
+html[data-theme="dark"] .chip-migErr{background:rgba(255,193,7,.22);color:#fce99c;}
+html[data-theme="dark"] .chip-failed{background:rgba(220,53,69,.28);color:#fbabaf;}
 
 .sp-pri{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;font-weight:700;font-size:.78rem;color:#fff;}
 .sp-pri.p1{background:#a4262c;}
 .sp-pri.p2{background:#d83b01;}
 .sp-pri.p3{background:#8a8886;}
 
-.sp-foot{background:#fff;border-top:1px solid #edebe9;padding:8px 18px;display:flex;align-items:center;justify-content:space-between;font-size:.78rem;color:#605e5c;}
+.sp-foot{background:#fff;border-top:1px solid #edebe9;padding:8px 18px;display:flex;align-items:center;justify-content:space-between;font-size:.78rem;color:#605e5c;flex-wrap:wrap;gap:8px;}
 html[data-theme="dark"] .sp-foot{background:#1f1e1d;border-top-color:#3b3a39;color:#a19f9d;}
 
-/* legend */
 .sp-legend{margin-top:16px;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:10px;padding:14px 18px;font-size:.86rem;}
 .sp-legend h4{font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--cp-accent);margin-bottom:10px;}
 .sp-legend .chips{display:flex;flex-wrap:wrap;gap:8px;}
-.sp-legend .chips .chip{cursor:default;}
+.sp-legend p{margin-top:12px;color:var(--cp-text-muted);font-size:.86rem;line-height:1.55;}
+.sp-legend code{background:var(--cp-surface-soft);border:1px solid var(--cp-border);padding:1px 6px;border-radius:4px;font-size:.82rem;color:var(--cp-text);}
 
-/* ========== DASHBOARD MOCKUP ========== */
-.dash{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:14px;box-shadow:var(--cp-shadow);overflow:hidden;}
-.dash-head{background:linear-gradient(135deg,var(--cp-accent),var(--cp-accent-hover));color:#fff;padding:22px 26px;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:14px;}
-.dash-head h2{font-size:1.4rem;font-weight:700;letter-spacing:-.01em;line-height:1.2;}
-.dash-head .sub{font-size:.82rem;opacity:.9;margin-top:4px;}
-.dash-head .live{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.18);padding:6px 12px;border-radius:999px;font-size:.78rem;font-weight:600;}
-.dash-head .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#4ade80;box-shadow:0 0 0 0 rgba(74,222,128,.6);animation:pulseGreen 2s infinite;}
-@keyframes pulseGreen{0%{box-shadow:0 0 0 0 rgba(74,222,128,.6);}70%{box-shadow:0 0 0 10px rgba(74,222,128,0);}100%{box-shadow:0 0 0 0 rgba(74,222,128,0);}}
+/* ========== DASHBOARD MOCKUP (mirrors New-MigrationDashboard.ps1 exactly) ========== */
+.dash{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;padding:24px;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:12px;box-shadow:var(--cp-shadow);}
+html[data-theme="dark"] .dash{background:#1a2330;}
 
-.dash-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--cp-border);}
-.kpi{background:var(--cp-surface);padding:18px 18px 16px;}
-.kpi .label{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--cp-text-soft);margin-bottom:6px;}
-.kpi .val{font-size:1.6rem;font-weight:800;letter-spacing:-.01em;color:var(--cp-text);font-variant-numeric:tabular-nums;line-height:1.1;}
-.kpi .delta{font-size:.78rem;color:var(--cp-text-muted);margin-top:2px;}
-.kpi .delta.up{color:var(--cp-success);}
-.kpi .delta.warn{color:var(--cp-warning);}
-.kpi .delta.bad{color:var(--cp-danger);}
-.kpi.accent .val{color:var(--cp-accent);}
+.dash-header{background:linear-gradient(180deg,#002868 0%,#0a1628 100%);color:#fff;padding:28px 30px;border-radius:8px;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,.4);}
+.dash-header h2{margin:0 0 8px 0;font-size:26px;color:#d4af37;text-transform:uppercase;letter-spacing:2px;font-weight:700;}
+.dash-header .sub{margin:0;font-size:13px;color:#8b9ab8;}
 
-.dash-body{padding:22px 26px;display:grid;grid-template-columns:1.4fr 1fr;gap:24px;}
-.dash-card{background:var(--cp-bg-elevated);border:1px solid var(--cp-border);border-radius:10px;padding:18px;}
-.dash-card h3{font-size:.84rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--cp-text-muted);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;}
-.dash-card h3 .ts{font-weight:500;text-transform:none;letter-spacing:0;color:var(--cp-text-soft);}
+/* Size summary cards (6) */
+.size-grid{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px;}
+.size-card{flex:1;min-width:170px;background:#fff;border-radius:8px;padding:18px;box-shadow:0 2px 4px rgba(0,0,0,.1);border-left:4px solid var(--bg);}
+html[data-theme="dark"] .size-card{background:#0f1822;}
+.size-card .lbl{font-size:13px;color:#666;margin-bottom:5px;}
+html[data-theme="dark"] .size-card .lbl{color:#9fb1c6;}
+.size-card .val{font-size:26px;font-weight:700;color:var(--bg);font-variant-numeric:tabular-nums;line-height:1.1;}
+.size-card.total{--bg:#17a2b8;}
+.size-card.yr7{--bg:#0078d4;}
+.size-card.yr5{--bg:#6f42c1;}
+.size-card.yr3{--bg:#e83e8c;}
+.size-card.migrated{--bg:#28a745;}
+.size-card.unc{--bg:#6c757d;}
 
-/* division progress rows */
-.divrow{display:grid;grid-template-columns:96px 1fr 110px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--cp-border);}
-.divrow:last-child{border-bottom:none;}
-.divrow .dname{font-weight:700;color:var(--cp-text);font-size:.92rem;}
-.divrow .bar{background:var(--cp-surface-soft);border-radius:999px;height:14px;overflow:hidden;position:relative;border:1px solid var(--cp-border);}
-.divrow .bar .seg{height:100%;float:left;}
-.divrow .bar .seg.ok{background:var(--cp-success);}
-.divrow .bar .seg.run{background:var(--cp-accent);background-image:linear-gradient(45deg,rgba(255,255,255,.25) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.25) 50%,rgba(255,255,255,.25) 75%,transparent 75%,transparent);background-size:14px 14px;animation:slide 1s linear infinite;}
-@keyframes slide{from{background-position:0 0;}to{background-position:14px 0;}}
-.divrow .bar .seg.warn{background:var(--cp-warning);}
-.divrow .bar .seg.bad{background:var(--cp-danger);}
-.divrow .stat{font-size:.82rem;color:var(--cp-text-muted);font-variant-numeric:tabular-nums;text-align:right;}
-.divrow .stat b{color:var(--cp-text);}
+/* Pipeline flow */
+.pipeline{background:#fff;border-radius:8px;padding:22px;box-shadow:0 2px 4px rgba(0,0,0,.1);margin-bottom:24px;}
+html[data-theme="dark"] .pipeline{background:#0f1822;}
+.pipeline h3{margin:0 0 18px 0;font-size:17px;color:#333;}
+html[data-theme="dark"] .pipeline h3{color:#e3ebf4;}
+.pipe-flow{display:flex;align-items:stretch;gap:0;justify-content:center;flex-wrap:wrap;}
+.pipe-stage{flex:1;max-width:170px;min-width:120px;text-align:center;}
+.pipe-stage .head{color:#fff;padding:9px 8px;border-radius:4px 4px 0 0;font-size:12px;font-weight:700;background:var(--bg);}
+.pipe-stage .body{background:var(--soft);border:2px solid var(--bg);border-top:none;padding:18px 8px;min-height:90px;border-radius:0 0 4px 4px;}
+.pipe-stage .n{font-size:34px;font-weight:700;color:var(--bg);line-height:1;}
+.pipe-stage .lbl{font-size:11px;color:#666;margin-top:8px;line-height:1.4;}
+html[data-theme="dark"] .pipe-stage .lbl{color:#9fb1c6;}
+.pipe-stage .lbl em{font-size:9px;color:#999;font-style:italic;display:block;margin-top:4px;}
+.pipe-stage.s-await   {--bg:#495057;--soft:#e9ecef;}
+.pipe-stage.s-target  {--bg:#6c757d;--soft:#f8f9fa;}
+.pipe-stage.s-resolved{--bg:#007bff;--soft:#e7f1ff;}
+.pipe-stage.s-queued  {--bg:#fd7e14;--soft:#fff8e6;}
+.pipe-stage.s-migrating{--bg:#e65100;--soft:#fff3cd;}
+.pipe-stage.s-complete{--bg:#28a745;--soft:#e8f5e9;}
+html[data-theme="dark"] .pipe-stage.s-await   {--soft:#252e38;}
+html[data-theme="dark"] .pipe-stage.s-target  {--soft:#1f2832;}
+html[data-theme="dark"] .pipe-stage.s-resolved{--soft:#162338;}
+html[data-theme="dark"] .pipe-stage.s-queued  {--soft:#2a200f;}
+html[data-theme="dark"] .pipe-stage.s-migrating{--soft:#2e1d0a;}
+html[data-theme="dark"] .pipe-stage.s-complete{--soft:#13261a;}
+.pipe-stage.s-complete .body .sub{font-size:11px;margin-top:8px;display:flex;justify-content:center;gap:10px;}
+.pipe-stage.s-complete .sub .ok{color:#28a745;}
+.pipe-stage.s-complete .sub .warn{color:#ffc107;}
+.pipe-stage.s-complete .sub .err{color:#dc3545;}
+.pipe-arrow{display:flex;align-items:center;padding:0 4px;color:#adb5bd;font-size:22px;font-weight:700;}
 
-/* worker grid */
-.wgrid{width:100%;border-collapse:collapse;font-size:.84rem;}
-.wgrid th{text-align:left;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--cp-text-soft);font-weight:700;padding:7px 8px;border-bottom:1px solid var(--cp-border);}
-.wgrid td{padding:9px 8px;border-bottom:1px solid var(--cp-border);color:var(--cp-text);vertical-align:middle;}
-.wgrid tr:last-child td{border-bottom:none;}
-.wgrid .srv{font-family:Consolas,"Courier New",monospace;font-size:.8rem;color:var(--cp-accent);}
-.wgrid .row{font-family:Consolas,"Courier New",monospace;font-size:.78rem;color:var(--cp-text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;}
-.wgrid .mbps{font-variant-numeric:tabular-nums;color:var(--cp-text-muted);text-align:right;}
-.wgrid .pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--cp-success);margin-right:6px;vertical-align:middle;box-shadow:0 0 0 0 rgba(22,163,74,.5);animation:pulseGreen 2s infinite;}
-.wgrid .pulse.idle{background:var(--cp-text-soft);animation:none;}
-
-/* failure breakdown */
-.fail-row{display:grid;grid-template-columns:1fr 70px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--cp-border);font-size:.88rem;}
-.fail-row:last-child{border-bottom:none;}
-.fail-row .lbl{color:var(--cp-text);}
-.fail-row .cnt{text-align:right;font-weight:700;color:var(--cp-danger);font-variant-numeric:tabular-nums;}
-.fail-row .lbl small{color:var(--cp-text-soft);font-weight:400;display:block;margin-top:2px;font-size:.78rem;}
-
-/* full-width bottom card */
-.dash-bottom{grid-column:1/-1;}
-
-@media (max-width:980px){
-  .dash-kpis{grid-template-columns:repeat(3,1fr);}
-  .dash-body{grid-template-columns:1fr;}
-}
-@media (max-width:560px){
-  .dash-kpis{grid-template-columns:repeat(2,1fr);}
-  .divrow{grid-template-columns:74px 1fr 90px;font-size:.85rem;}
-}
+/* Division Breakdown table */
+.divtbl-card{background:#fff;border-radius:8px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,.1);}
+html[data-theme="dark"] .divtbl-card{background:#0f1822;}
+.divtbl-card h3{margin:0 0 14px 0;font-size:17px;color:#333;}
+html[data-theme="dark"] .divtbl-card h3{color:#e3ebf4;}
+.divtbl-wrap{overflow-x:auto;}
+.divtbl{width:100%;border-collapse:collapse;font-size:13px;min-width:920px;}
+.divtbl thead tr{background:#f8f9fa;border-bottom:2px solid #dee2e6;}
+html[data-theme="dark"] .divtbl thead tr{background:#1a2330;border-bottom-color:#2c3e51;}
+.divtbl th{padding:10px 6px;font-weight:600;color:#333;text-align:right;font-size:12px;}
+html[data-theme="dark"] .divtbl th{color:#e3ebf4;}
+.divtbl th:first-child,.divtbl td:first-child{text-align:left;font-weight:700;}
+.divtbl th.ctr,.divtbl td.ctr{text-align:center;}
+.divtbl th.hl-migrated{background:#d4edda;}
+.divtbl th.hl-await{background:#e9ecef;}
+.divtbl th.hl-scan{background:#f8f9fa;}
+.divtbl th.hl-res{background:#e7f1ff;}
+.divtbl th.hl-q{background:#fff8e6;}
+.divtbl th.hl-mig{background:#fff3cd;}
+.divtbl th.hl-ok{background:#d4edda;}
+.divtbl th.hl-warn{background:#fff3cd;}
+.divtbl th.hl-err{background:#f8d7da;}
+html[data-theme="dark"] .divtbl th.hl-migrated,html[data-theme="dark"] .divtbl th.hl-ok{background:rgba(40,167,69,.18);}
+html[data-theme="dark"] .divtbl th.hl-await,html[data-theme="dark"] .divtbl th.hl-scan{background:rgba(108,117,125,.18);}
+html[data-theme="dark"] .divtbl th.hl-res{background:rgba(0,123,255,.18);}
+html[data-theme="dark"] .divtbl th.hl-q{background:rgba(253,126,20,.18);}
+html[data-theme="dark"] .divtbl th.hl-mig,html[data-theme="dark"] .divtbl th.hl-warn{background:rgba(255,193,7,.18);}
+html[data-theme="dark"] .divtbl th.hl-err{background:rgba(220,53,69,.18);}
+.divtbl tbody td{padding:9px 6px;text-align:right;color:#212529;border-bottom:1px solid #f1f3f5;font-variant-numeric:tabular-nums;}
+html[data-theme="dark"] .divtbl tbody td{color:#e3ebf4;border-bottom-color:#1f2e3d;}
+.divtbl tbody tr:hover{background:#f8f9fa;}
+html[data-theme="dark"] .divtbl tbody tr:hover{background:#1a2330;}
+.divtbl tbody td.migrated{color:#28a745;font-weight:700;}
+.divtbl tbody td.await   {color:#495057;}
+html[data-theme="dark"] .divtbl tbody td.await{color:#9fb1c6;}
+.divtbl tbody td.res     {color:#007bff;}
+.divtbl tbody td.q       {color:#fd7e14;}
+.divtbl tbody td.mig     {color:#e65100;}
+.divtbl tfoot tr{background:#e9ecef;font-weight:700;border-top:2px solid #dee2e6;}
+html[data-theme="dark"] .divtbl tfoot tr{background:#1f2e3d;border-top-color:#2c3e51;}
+.divtbl tfoot td{padding:11px 6px;text-align:right;}
+.divtbl tfoot td.migrated{color:#28a745;}
+.divtbl tfoot td.res{color:#007bff;}
+.divtbl tfoot td.q{color:#fd7e14;}
+.divtbl tfoot td.mig{color:#e65100;}
 
 footer{padding:44px 0 60px;text-align:center;color:var(--cp-text-soft);font-size:.88rem;}
 footer .v{color:var(--cp-text-muted);}
 footer a{color:var(--cp-accent);text-decoration:none;}
 footer a:hover{text-decoration:underline;}
+
+@media (max-width:760px){
+  .pipe-arrow{display:none;}
+  .pipe-stage{max-width:none;flex-basis:46%;}
+}
 </style>
 </head>
 <body>
@@ -260,7 +301,7 @@ footer a:hover{text-decoration:underline;}
   <div class="wrap">
     <span class="eyebrow"><span class="pulse-dot"></span> See the operator surface</span>
     <h1 class="title">What the playbooks <span class="grad">actually look like.</span></h1>
-    <p class="lede">The Common Drive playbook is driven by a SharePoint list and produces a live HTML dashboard. Here's what each one looks like to an operator — exact columns, exact states, exact KPIs the scripts emit.</p>
+    <p class="lede">The Common Drive playbook is driven by a SharePoint list and produces a live HTML dashboard. Both views below match the real schema: column names from <code style="font-family:Consolas,monospace;font-size:.95em;background:var(--cp-surface-soft);padding:1px 6px;border-radius:4px;">Update-MigrationTargets.v2.ps1</code> + <code style="font-family:Consolas,monospace;font-size:.95em;background:var(--cp-surface-soft);padding:1px 6px;border-radius:4px;">CommonDriveMigration.v2.ps1</code>, dashboard layout from <code style="font-family:Consolas,monospace;font-size:.95em;background:var(--cp-surface-soft);padding:1px 6px;border-radius:4px;">New-MigrationDashboard.ps1</code>.</p>
     <span class="disclaim">⚠ Illustrative mockups — sanitized fake data; not a live feed.</span>
   </div>
 </header>
@@ -274,6 +315,8 @@ footer a:hover{text-decoration:underline;}
 
     <!-- ============ SP LIST PANEL ============ -->
     <div class="mpanel active" id="panel-list" role="tabpanel">
+
+      <p class="source-note">Modern SharePoint list <code>CommonDriveMigration</code>. Columns and values below mirror what the orchestrator and scheduled scripts read/write. Only a subset of columns are visible at any time; this view shows the full operator-facing set.</p>
 
       <div class="sp-frame">
         <div class="sp-suiteBar">
@@ -313,134 +356,310 @@ footer a:hover{text-decoration:underline;}
                 <th>SourcePath</th>
                 <th>TeamName</th>
                 <th>TeamChannel0</th>
+                <th>TargetURL</th>
                 <th>TimeZone</th>
                 <th>Priority</th>
                 <th>Migrate</th>
-                <th>Stage</th>
+                <th>Processing</th>
+                <th>Server</th>
                 <th>ClaimedBy</th>
+                <th class="num">TotalSize (MB)</th>
                 <th class="num">Size7YrMB</th>
                 <th class="num">Size5YrMB</th>
                 <th class="num">Size3YrMB</th>
                 <th>YearUsed</th>
+                <th class="num">StorageQuota</th>
+                <th class="num">StorageUsed</th>
                 <th>QueuedAt</th>
+                <th>StartDate</th>
+                <th>CompletedDate</th>
+                <th>LOG</th>
+                <th>Reacl</th>
+                <th>ScriptError / TeamChannelError</th>
               </tr>
             </thead>
             <tbody>
+
+              <!-- Row 1: Migrated (complete success) -->
               <tr>
-                <td>DIV1</td><td>DIV1 Engineering Share</td>
+                <td>DIV1</td>
+                <td>DIV1 Engineering Share</td>
                 <td class="path">\\fs01\common\eng</td>
                 <td>DIV1-Engineering</td><td>General</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV1-Eng</a></td>
                 <td><span class="chip chip-tz">EST</span></td>
                 <td><span class="sp-pri p1">1</span></td>
-                <td><span class="chip chip-migrated">Migrated</span></td><td>—</td>
-                <td class="path">CMP-WRK-04</td>
-                <td class="num">412,880</td><td class="num">298,114</td><td class="num">184,220</td>
-                <td>7yr</td><td class="num">06/09 17:02</td>
+                <td><span class="chip chip-migrated">Migrated</span></td>
+                <td class="dim">—</td>
+                <td class="mono">CMP-WRK-04</td>
+                <td class="mono">scan:1.2|target:1.4</td>
+                <td class="num">412,880</td>
+                <td class="num">298,114</td>
+                <td class="num">184,220</td>
+                <td class="num">184,220</td>
+                <td>3yr</td>
+                <td class="num">512,000</td>
+                <td class="num">198,640</td>
+                <td class="mono">06/09 17:02</td>
+                <td class="mono">06/11 02:14</td>
+                <td class="mono">06/11 08:47</td>
+                <td class="url"><a href="#">F:\Logs\…\Report</a></td>
+                <td>Updated</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 2: Migrating (active) -->
               <tr>
-                <td>DIV1</td><td>DIV1 Finance Reports</td>
+                <td>DIV1</td>
+                <td>DIV1 Finance Reports</td>
                 <td class="path">\\fs01\common\finance</td>
                 <td>DIV1-Finance</td><td>Reports</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV1-Finance</a></td>
                 <td><span class="chip chip-tz">EST</span></td>
                 <td><span class="sp-pri p1">1</span></td>
                 <td><span class="chip chip-migrating">Migrating</span></td>
-                <td>—</td>
-                <td class="path">CMP-WRK-02</td>
-                <td class="num">88,240</td><td class="num">62,118</td><td class="num">40,890</td>
-                <td>7yr</td><td class="num">06/11 19:14</td>
+                <td class="mono">Processing-CMP-WRK-02-a8f1c402</td>
+                <td class="mono">CMP-WRK-02</td>
+                <td class="mono">scan:1.1|target:1.2</td>
+                <td class="num">88,240</td>
+                <td class="num">62,118</td>
+                <td class="num">40,890</td>
+                <td class="num">40,890</td>
+                <td>5yr</td>
+                <td class="num">256,000</td>
+                <td class="num">14,210</td>
+                <td class="mono">06/11 19:14</td>
+                <td class="mono">06/12 11:46</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 3: Staged (ready for cutover) -->
               <tr>
-                <td>DIV2</td><td>DIV2 Legal Archive</td>
+                <td>DIV2</td>
+                <td>DIV2 Legal Archive</td>
                 <td class="path">\\fs02\common\legal-archive</td>
                 <td>DIV2-Legal</td><td>Archive</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV2-Legal</a></td>
                 <td><span class="chip chip-tz">CST</span></td>
                 <td><span class="sp-pri p2">2</span></td>
                 <td><span class="chip chip-staged">Staged</span></td>
-                <td><span class="chip chip-staged">Staged</span></td>
-                <td class="path">CMP-WRK-01</td>
-                <td class="num">1,204,500</td><td class="num">892,330</td><td class="num">540,210</td>
-                <td>5yr</td><td class="num">06/11 22:40</td>
+                <td class="dim">—</td>
+                <td class="mono">CMP-WRK-01</td>
+                <td class="mono">scan:2.1|target:1.1</td>
+                <td class="num">1,204,500</td>
+                <td class="num">892,330</td>
+                <td class="num">540,210</td>
+                <td class="num">540,210</td>
+                <td>3yr</td>
+                <td class="num">2,048,000</td>
+                <td class="num">540,210</td>
+                <td class="mono">06/10 22:40</td>
+                <td class="mono">06/11 03:00</td>
+                <td class="mono">06/11 22:18</td>
+                <td class="url"><a href="#">F:\Logs\…\StageReport</a></td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 4: StagedWithErrors -->
               <tr>
-                <td>DIV2</td><td>DIV2 HR Records</td>
+                <td>DIV2</td>
+                <td>DIV2 HR Records</td>
                 <td class="path">\\fs02\common\hr</td>
                 <td>DIV2-HR</td><td>Records</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV2-HR</a></td>
                 <td><span class="chip chip-tz">CST</span></td>
                 <td><span class="sp-pri p2">2</span></td>
                 <td><span class="chip chip-stagedErr">StagedWithErrors</span></td>
-                <td><span class="chip chip-stagedErr">Errors</span></td>
-                <td class="path">CMP-WRK-03</td>
-                <td class="num">28,440</td><td class="num">22,110</td><td class="num">14,602</td>
-                <td>5yr</td><td class="num">06/11 23:08</td>
+                <td class="dim">—</td>
+                <td class="mono">CMP-WRK-03</td>
+                <td class="mono">scan:2.2|target:1.3</td>
+                <td class="num">28,440</td>
+                <td class="num">22,110</td>
+                <td class="num">14,602</td>
+                <td class="num">14,602</td>
+                <td>3yr</td>
+                <td class="num">128,000</td>
+                <td class="num">14,602</td>
+                <td class="mono">06/11 04:08</td>
+                <td class="mono">06/11 04:20</td>
+                <td class="mono">06/11 23:08</td>
+                <td class="url"><a href="#">F:\Logs\…\Report</a></td>
+                <td class="dim">—</td>
+                <td>4 path-too-long items (see FailureSummaryReport2.csv attached)</td>
               </tr>
+
+              <!-- Row 5: Migrate (operator-set, ready to run) -->
               <tr>
-                <td>DIV3</td><td>DIV3 Operations</td>
+                <td>DIV3</td>
+                <td>DIV3 Operations</td>
                 <td class="path">\\fs03\common\ops</td>
                 <td>DIV3-Operations</td><td>General</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV3-Ops</a></td>
                 <td><span class="chip chip-tz">MST</span></td>
                 <td><span class="sp-pri p2">2</span></td>
-                <td><span class="chip chip-ready">Ready</span></td><td>—</td>
-                <td>—</td>
-                <td class="num">516,800</td><td class="num">348,920</td><td class="num">220,540</td>
-                <td>—</td><td class="num">06/12 06:30</td>
+                <td><span class="chip chip-migrate">Migrate</span></td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="mono">scan:2.3</td>
+                <td class="num">516,800</td>
+                <td class="num">348,920</td>
+                <td class="num">220,540</td>
+                <td class="num">120,800</td>
+                <td class="dim">—</td>
+                <td class="num">512,000</td>
+                <td class="num">0</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 6: Stage (staging copy in progress) -->
               <tr>
-                <td>DIV3</td><td>DIV3 Training Materials</td>
+                <td>DIV3</td>
+                <td>DIV3 Training Materials</td>
                 <td class="path">\\fs03\common\training</td>
                 <td>DIV3-Training</td><td>Library</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV3-Training</a></td>
                 <td><span class="chip chip-tz">MST</span></td>
                 <td><span class="sp-pri p3">3</span></td>
                 <td><span class="chip chip-stage">Stage</span></td>
-                <td><span class="chip chip-migrating">Staging</span></td>
-                <td class="path">CMP-WRK-05</td>
-                <td class="num">94,310</td><td class="num">71,820</td><td class="num">48,640</td>
-                <td>—</td><td class="num">06/12 06:42</td>
+                <td class="mono">Processing-CMP-WRK-05-3c91be07</td>
+                <td class="mono">CMP-WRK-05</td>
+                <td class="mono">scan:2.3|target:2.2</td>
+                <td class="num">94,310</td>
+                <td class="num">71,820</td>
+                <td class="num">48,640</td>
+                <td class="num">48,640</td>
+                <td>3yr</td>
+                <td class="num">128,000</td>
+                <td class="num">0</td>
+                <td class="mono">06/12 06:42</td>
+                <td class="mono">06/12 11:58</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 7: Failed -->
               <tr>
-                <td>DIV4</td><td>DIV4 Field Office Shared</td>
+                <td>DIV4</td>
+                <td>DIV4 Field Office Shared</td>
                 <td class="path">\\fs04\common\field</td>
                 <td>DIV4-Field</td><td>General</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV4-Field</a></td>
                 <td><span class="chip chip-tz">PST</span></td>
                 <td><span class="sp-pri p2">2</span></td>
-                <td><span class="chip chip-failed">Failed</span></td><td>—</td>
-                <td class="path">CMP-WRK-02</td>
-                <td class="num">312,140</td><td class="num">220,640</td><td class="num">142,890</td>
-                <td>—</td><td class="num">06/10 02:18</td>
+                <td><span class="chip chip-failed">Failed</span></td>
+                <td class="dim">—</td>
+                <td class="mono">CMP-WRK-02</td>
+                <td class="mono">scan:3.1|target:1.2</td>
+                <td class="num">312,140</td>
+                <td class="num">220,640</td>
+                <td class="num">142,890</td>
+                <td class="num">142,890</td>
+                <td class="dim">—</td>
+                <td class="num">512,000</td>
+                <td class="num">0</td>
+                <td class="mono">06/09 02:18</td>
+                <td class="mono">06/10 02:18</td>
+                <td class="mono">06/10 03:42</td>
+                <td class="url"><a href="#">F:\Logs\…\Report</a></td>
+                <td class="dim">—</td>
+                <td>[EXCEPTION] SPMT throttled after 7 retries (HTTP 429)</td>
               </tr>
+
+              <!-- Row 8: MigratedWithErrors -->
               <tr>
-                <td>DIV4</td><td>DIV4 Procurement</td>
+                <td>DIV4</td>
+                <td>DIV4 Procurement</td>
                 <td class="path">\\fs04\common\procurement</td>
                 <td>DIV4-Procurement</td><td>Records</td>
+                <td class="url"><a href="#">contoso.spo.microsoft.scloud/sites/DIV4-Procure</a></td>
                 <td><span class="chip chip-tz">PST</span></td>
                 <td><span class="sp-pri p3">3</span></td>
-                <td><span class="chip chip-errorLog">ErrorLog</span></td>
-                <td>—</td>
-                <td class="path">CMP-WRK-04</td>
-                <td class="num">66,420</td><td class="num">48,212</td><td class="num">32,108</td>
-                <td>3yr</td><td class="num">06/11 04:55</td>
+                <td><span class="chip chip-migErr">MigratedWithErrors</span></td>
+                <td class="dim">—</td>
+                <td class="mono">CMP-WRK-04</td>
+                <td class="mono">scan:3.2|target:1.4</td>
+                <td class="num">66,420</td>
+                <td class="num">48,212</td>
+                <td class="num">32,108</td>
+                <td class="num">32,108</td>
+                <td>3yr</td>
+                <td class="num">128,000</td>
+                <td class="num">32,108</td>
+                <td class="mono">06/10 04:55</td>
+                <td class="mono">06/10 22:30</td>
+                <td class="mono">06/11 04:55</td>
+                <td class="url"><a href="#">F:\Logs\…\Report</a></td>
+                <td>Updated</td>
+                <td>2 reserved-char filenames skipped (see attachment)</td>
               </tr>
+
+              <!-- Row 9: Blank - new, awaiting scan -->
               <tr>
-                <td>BRANCH1</td><td>BRANCH1 Communications</td>
+                <td>BRANCH1</td>
+                <td>BRANCH1 Communications</td>
                 <td class="path">\\fs05\common\comms</td>
                 <td>BRANCH1-Comms</td><td>General</td>
-                <td><span class="chip chip-tz">ANYTIME</span></td>
-                <td><span class="sp-pri p1">1</span></td>
-                <td><span class="chip chip-blank">Blank</span></td><td>—</td>
-                <td>—</td>
-                <td class="num">22,118</td><td class="num">17,640</td><td class="num">11,802</td>
-                <td>—</td><td>—</td>
-              </tr>
-              <tr>
-                <td>Unit-13</td><td>Unit-13 R&amp;D Lab Drive</td>
-                <td class="path">\\fs06\common\rd</td>
-                <td>Unit13-RD</td><td>Lab</td>
+                <td class="dim">—</td>
                 <td><span class="chip chip-tz">EST</span></td>
                 <td><span class="sp-pri p1">1</span></td>
-                <td><span class="chip chip-blank">Blank</span></td><td>—</td>
-                <td>—</td>
-                <td class="num">1,820,440</td><td class="num">1,210,890</td><td class="num">740,210</td>
-                <td>—</td><td>—</td>
+                <td><span class="chip chip-blank">(blank)</span></td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
               </tr>
+
+              <!-- Row 10: Awaiting Target (scanned but no TargetURL) -->
+              <tr>
+                <td>Unit-13</td>
+                <td>Unit-13 R&amp;D Lab Drive</td>
+                <td class="path">\\fs06\common\rd</td>
+                <td>Unit13-RD</td><td>Lab</td>
+                <td class="dim">— (awaiting Phase 1)</td>
+                <td><span class="chip chip-tz">EST</span></td>
+                <td><span class="sp-pri p1">1</span></td>
+                <td><span class="chip chip-blank">(blank)</span></td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="mono">scan:3.3</td>
+                <td class="num">1,820,440</td>
+                <td class="num">1,210,890</td>
+                <td class="num">740,210</td>
+                <td class="num">410,650</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td class="dim">—</td>
+                <td>Channel "Lab" not found in tenant (Graph 404)</td>
+              </tr>
+
             </tbody>
           </table>
         </div>
@@ -452,21 +671,20 @@ footer a:hover{text-decoration:underline;}
       </div>
 
       <div class="sp-legend">
-        <h4>Migration states (Migrate column)</h4>
+        <h4>Migrate column states</h4>
         <div class="chips">
-          <span class="chip chip-blank">Blank</span>
-          <span class="chip chip-ready">Ready</span>
+          <span class="chip chip-blank">(blank)</span>
           <span class="chip chip-stage">Stage</span>
-          <span class="chip chip-migrating">Staging / Migrating</span>
           <span class="chip chip-staged">Staged</span>
           <span class="chip chip-stagedErr">StagedWithErrors</span>
+          <span class="chip chip-stageFail">StageFailed</span>
+          <span class="chip chip-migrate">Migrate</span>
+          <span class="chip chip-migrating">Migrating (Processing not empty)</span>
           <span class="chip chip-migrated">Migrated</span>
-          <span class="chip chip-errorLog">ErrorLog</span>
+          <span class="chip chip-migErr">MigratedWithErrors</span>
           <span class="chip chip-failed">Failed</span>
         </div>
-        <p style="margin-top:12px;color:var(--cp-text-muted);font-size:.84rem;line-height:1.5;">
-          Other columns the script reads or writes (not shown to keep the row readable): <code>ITDistro</code>, <code>SiteUrl</code>, <code>ExtendedHours</code>, <code>ClaimedAt</code>, <code>TeamChannelError</code>, <code>StartDate</code>, <code>CompletedDate</code>, <code>Log</code>, <code>StagedReport</code>, <code>FailureReport</code>. The full schema lives in <code>Update-MigrationTargets.v2.ps1</code>.
-        </p>
+        <p><b>Column owners.</b> <code>Title</code>, <code>DIV</code>, <code>SourcePath</code> come from <code>Import-MigrationSources.ps1</code>. <code>TotalSize</code> + <code>Size7YrMB</code>/<code>Size5YrMB</code>/<code>Size3YrMB</code> + scan timestamp come from <code>Invoke-UNCStorageScan-v2.ps1</code>. <code>TargetURL</code>, <code>TargetRelativePath</code>, <code>TeamChannelError</code>, <code>StorageQuota</code>, <code>StorageUsed</code>, <code>StorageAvailable</code>, <code>LastChecked</code> come from <code>Update-MigrationTargets.v2.ps1</code> (Phase 1 + Phase 2). <code>ClaimedBy</code> uses the format <code>scan:DC.Server|target:DC.Server</code>. <code>Processing</code> holds the atomic claim ID <code>Processing-{computer}-{guid}</code>. Operator sets <code>Migrate=Stage</code> or <code>Migrate=Migrate</code> and (optionally) <code>TimeZone</code>, <code>Priority</code>. Orchestrator writes <code>Server</code>, <code>QueuedAt</code>, <code>StartDate</code>, <code>CompletedDate</code>, <code>LOG</code>, <code>ScriptError</code>, <code>YearUsed</code>, <code>Reacl</code>, and the final <code>Migrate</code> state.</p>
       </div>
 
     </div>
@@ -474,161 +692,156 @@ footer a:hover{text-decoration:underline;}
     <!-- ============ DASHBOARD PANEL ============ -->
     <div class="mpanel" id="panel-dash" role="tabpanel">
 
+      <p class="source-note">Generated by <code>New-MigrationDashboard.ps1</code> (v2.6.0) on a scheduled task every 2 hours; published as a Modern SharePoint page in the same site as the driver list. Layout, colors, and labels below are reproduced from the script's embedded HTML template.</p>
+
       <div class="dash">
-        <div class="dash-head">
-          <div>
-            <h2>Common Drive Migration · Pipeline Dashboard</h2>
-            <div class="sub">Generated by <code style="background:rgba(255,255,255,.18);padding:1px 6px;border-radius:4px;font-size:.78rem;">New-MigrationDashboard.ps1</code> · refresh every 5 min</div>
-          </div>
-          <span class="live">LIVE</span>
+
+        <div class="dash-header">
+          <h2>Common Drive Migration Dashboard</h2>
+          <p class="sub">Last Updated 06/12/2026 12:04 EST</p>
         </div>
 
-        <div class="dash-kpis">
-          <div class="kpi">
-            <div class="label">Total rows</div>
-            <div class="val">248</div>
-            <div class="delta">across 5 divisions</div>
-          </div>
-          <div class="kpi accent">
-            <div class="label">Migrated</div>
-            <div class="val">172</div>
-            <div class="delta up">+18 in last 24h</div>
-          </div>
-          <div class="kpi">
-            <div class="label">In flight</div>
-            <div class="val">9</div>
-            <div class="delta">6 workers active</div>
-          </div>
-          <div class="kpi">
-            <div class="label">Failed / ErrorLog</div>
-            <div class="val">14</div>
-            <div class="delta warn">3 awaiting retry</div>
-          </div>
-          <div class="kpi">
-            <div class="label">TB transferred</div>
-            <div class="val">38.4</div>
-            <div class="delta up">+2.1 today</div>
-          </div>
-          <div class="kpi">
-            <div class="label">Est. ETA</div>
-            <div class="val">11 d</div>
-            <div class="delta">at current throughput</div>
+        <!-- Size Summary -->
+        <div class="size-grid">
+          <div class="size-card total"><div class="lbl">Total Size (Scanned)</div><div class="val">38.4 TB</div></div>
+          <div class="size-card yr7"><div class="lbl">7yr Size</div><div class="val">31.2 TB</div></div>
+          <div class="size-card yr5"><div class="lbl">5yr Size</div><div class="val">22.7 TB</div></div>
+          <div class="size-card yr3"><div class="lbl">3yr Size</div><div class="val">14.1 TB</div></div>
+          <div class="size-card migrated"><div class="lbl">Migrated</div><div class="val">12.6 TB</div></div>
+          <div class="size-card unc"><div class="lbl">UNC Folders Scanned</div><div class="val">231</div></div>
+        </div>
+
+        <!-- Pipeline Flow -->
+        <div class="pipeline">
+          <h3>Migration Pipeline</h3>
+          <div class="pipe-flow">
+
+            <div class="pipe-stage s-await">
+              <div class="head">Awaiting Scan</div>
+              <div class="body"><div class="n">17</div><div class="lbl">New Items<br>Entered</div></div>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+
+            <div class="pipe-stage s-target">
+              <div class="head">Awaiting Target</div>
+              <div class="body"><div class="n">8</div><div class="lbl">Scanned, Needs<br>Target Resolution</div></div>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+
+            <div class="pipe-stage s-resolved">
+              <div class="head">Resolved</div>
+              <div class="body"><div class="n">223</div><div class="lbl">Have Target URL<br>(cumulative)</div></div>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+
+            <div class="pipe-stage s-queued">
+              <div class="head">Queued</div>
+              <div class="body"><div class="n">14</div><div class="lbl">Awaiting Processing</div></div>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+
+            <div class="pipe-stage s-migrating">
+              <div class="head">Migrating</div>
+              <div class="body"><div class="n">5</div><div class="lbl">Active<em>*May be low during day</em></div></div>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+
+            <div class="pipe-stage s-complete">
+              <div class="head">Complete</div>
+              <div class="body">
+                <div class="n">186</div>
+                <div class="sub">
+                  <span class="ok" title="Migrated">&#10003;172</span>
+                  <span class="warn" title="MigratedWithErrors">&#9888;7</span>
+                  <span class="err" title="Failed">&#10007;7</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
-        <div class="dash-body">
-
-          <div class="dash-card">
-            <h3>Progress by division <span class="ts">refreshed 12:04 PDT</span></h3>
-            <div class="divrow">
-              <span class="dname">DIV1</span>
-              <div class="bar" title="48 migrated · 2 running · 0 failed · 12 remaining">
-                <span class="seg ok" style="width:77%"></span>
-                <span class="seg run" style="width:3%"></span>
-                <span class="seg" style="width:0%"></span>
-              </div>
-              <span class="stat"><b>48</b> / 62</span>
-            </div>
-            <div class="divrow">
-              <span class="dname">DIV2</span>
-              <div class="bar" title="38 migrated · 3 running · 4 failed · 13 remaining">
-                <span class="seg ok" style="width:66%"></span>
-                <span class="seg run" style="width:5%"></span>
-                <span class="seg bad" style="width:7%"></span>
-              </div>
-              <span class="stat"><b>38</b> / 58</span>
-            </div>
-            <div class="divrow">
-              <span class="dname">DIV3</span>
-              <div class="bar" title="42 migrated · 2 running · 3 failed · 11 remaining">
-                <span class="seg ok" style="width:72%"></span>
-                <span class="seg run" style="width:3%"></span>
-                <span class="seg bad" style="width:5%"></span>
-              </div>
-              <span class="stat"><b>42</b> / 58</span>
-            </div>
-            <div class="divrow">
-              <span class="dname">DIV4</span>
-              <div class="bar" title="29 migrated · 1 running · 5 failed · 8 remaining">
-                <span class="seg ok" style="width:67%"></span>
-                <span class="seg run" style="width:2%"></span>
-                <span class="seg bad" style="width:12%"></span>
-              </div>
-              <span class="stat"><b>29</b> / 43</span>
-            </div>
-            <div class="divrow">
-              <span class="dname">BRANCH1</span>
-              <div class="bar" title="12 migrated · 1 running · 2 failed · 7 remaining">
-                <span class="seg ok" style="width:55%"></span>
-                <span class="seg run" style="width:4%"></span>
-                <span class="seg bad" style="width:9%"></span>
-              </div>
-              <span class="stat"><b>12</b> / 22</span>
-            </div>
-            <div class="divrow">
-              <span class="dname">Unit-13</span>
-              <div class="bar" title="3 migrated · 0 running · 0 failed · 2 remaining">
-                <span class="seg ok" style="width:60%"></span>
-              </div>
-              <span class="stat"><b>3</b> / 5</span>
-            </div>
-          </div>
-
-          <div class="dash-card">
-            <h3>Top failure categories <span class="ts">last 7 days</span></h3>
-            <div class="fail-row">
-              <span class="lbl">SPMT throttling (429 / 503)<small>retried automatically with backoff</small></span>
-              <span class="cnt">6</span>
-            </div>
-            <div class="fail-row">
-              <span class="lbl">Path too long (&gt; 400 chars)<small>blocked at scan; row flagged for triage</small></span>
-              <span class="cnt">3</span>
-            </div>
-            <div class="fail-row">
-              <span class="lbl">Quota would exceed at 3-yr horizon<small>flagged for manual review</small></span>
-              <span class="cnt">2</span>
-            </div>
-            <div class="fail-row">
-              <span class="lbl">Team channel not resolvable via Graph<small>TeamChannelError stamped on row</small></span>
-              <span class="cnt">2</span>
-            </div>
-            <div class="fail-row">
-              <span class="lbl">Reserved file names / characters<small>Windows-illegal; needs rename at source</small></span>
-              <span class="cnt">1</span>
-            </div>
-          </div>
-
-          <div class="dash-card dash-bottom">
-            <h3>Active workers <span class="ts">6 of 6 online</span></h3>
-            <table class="wgrid">
+        <!-- Division Breakdown -->
+        <div class="divtbl-card">
+          <h3>Division Breakdown</h3>
+          <div class="divtbl-wrap">
+            <table class="divtbl">
               <thead>
                 <tr>
-                  <th style="width:130px;">Worker</th>
-                  <th>Current row</th>
-                  <th style="width:90px;">Stage</th>
-                  <th style="width:110px;">Started</th>
-                  <th style="width:90px;" class="mbps">MB/s</th>
-                  <th style="width:90px;" class="mbps">Files</th>
-                  <th style="width:90px;">Status</th>
+                  <th>Division</th>
+                  <th>Total</th>
+                  <th>7yr</th>
+                  <th>5yr</th>
+                  <th>3yr</th>
+                  <th class="hl-migrated">Migrated</th>
+                  <th class="ctr hl-await">Await</th>
+                  <th class="ctr hl-scan">Scan</th>
+                  <th class="ctr hl-res">Res</th>
+                  <th class="ctr hl-q">Q</th>
+                  <th class="ctr hl-mig">Mig</th>
+                  <th class="ctr hl-ok">&#10003;</th>
+                  <th class="ctr hl-warn">&#9888;</th>
+                  <th class="ctr hl-err">&#10007;</th>
                 </tr>
               </thead>
               <tbody>
-                <tr><td><span class="srv">CMP-WRK-01</span></td><td><span class="row">DIV2 Legal Archive</span></td><td>cutover</td><td>11:18</td><td class="mbps">42.8</td><td class="mbps">182,440</td><td><span class="pulse"></span>running</td></tr>
-                <tr><td><span class="srv">CMP-WRK-02</span></td><td><span class="row">DIV1 Finance Reports</span></td><td>migrating</td><td>11:46</td><td class="mbps">38.2</td><td class="mbps">42,118</td><td><span class="pulse"></span>running</td></tr>
-                <tr><td><span class="srv">CMP-WRK-03</span></td><td><span class="row">DIV2 HR Records</span></td><td>retry</td><td>12:01</td><td class="mbps">14.5</td><td class="mbps">8,402</td><td><span class="pulse"></span>running</td></tr>
-                <tr><td><span class="srv">CMP-WRK-04</span></td><td><span class="row">DIV4 Procurement</span></td><td>staging</td><td>11:52</td><td class="mbps">28.1</td><td class="mbps">22,610</td><td><span class="pulse"></span>running</td></tr>
-                <tr><td><span class="srv">CMP-WRK-05</span></td><td><span class="row">DIV3 Training Materials</span></td><td>staging</td><td>11:58</td><td class="mbps">31.7</td><td class="mbps">14,840</td><td><span class="pulse"></span>running</td></tr>
-                <tr><td><span class="srv">CMP-WRK-06</span></td><td><span class="row">— (waiting for claim)</span></td><td>—</td><td>—</td><td class="mbps">—</td><td class="mbps">—</td><td><span class="pulse idle"></span>idle</td></tr>
+                <tr>
+                  <td>DIV1</td>
+                  <td>9.8 TB</td><td>8.1 TB</td><td>5.7 TB</td><td>3.6 TB</td>
+                  <td class="migrated">3.4 TB</td>
+                  <td class="ctr await">4</td><td class="ctr">58</td><td class="ctr res">58</td><td class="ctr q">3</td><td class="ctr mig">2</td>
+                  <td class="ctr">48</td><td class="ctr">2</td><td class="ctr">1</td>
+                </tr>
+                <tr>
+                  <td>DIV2</td>
+                  <td>11.2 TB</td><td>9.4 TB</td><td>6.8 TB</td><td>4.2 TB</td>
+                  <td class="migrated">3.1 TB</td>
+                  <td class="ctr await">3</td><td class="ctr">55</td><td class="ctr res">55</td><td class="ctr q">4</td><td class="ctr mig">1</td>
+                  <td class="ctr">36</td><td class="ctr">2</td><td class="ctr">4</td>
+                </tr>
+                <tr>
+                  <td>DIV3</td>
+                  <td>7.4 TB</td><td>5.9 TB</td><td>4.1 TB</td><td>2.6 TB</td>
+                  <td class="migrated">2.5 TB</td>
+                  <td class="ctr await">5</td><td class="ctr">52</td><td class="ctr res">52</td><td class="ctr q">3</td><td class="ctr mig">1</td>
+                  <td class="ctr">42</td><td class="ctr">1</td><td class="ctr">0</td>
+                </tr>
+                <tr>
+                  <td>DIV4</td>
+                  <td>6.8 TB</td><td>5.6 TB</td><td>4.0 TB</td><td>2.4 TB</td>
+                  <td class="migrated">2.2 TB</td>
+                  <td class="ctr await">3</td><td class="ctr">39</td><td class="ctr res">39</td><td class="ctr q">2</td><td class="ctr mig">1</td>
+                  <td class="ctr">28</td><td class="ctr">1</td><td class="ctr">2</td>
+                </tr>
+                <tr>
+                  <td>BRANCH1</td>
+                  <td>2.6 TB</td><td>1.8 TB</td><td>1.4 TB</td><td>0.9 TB</td>
+                  <td class="migrated">1.0 TB</td>
+                  <td class="ctr await">1</td><td class="ctr">21</td><td class="ctr res">17</td><td class="ctr q">2</td><td class="ctr mig">0</td>
+                  <td class="ctr">14</td><td class="ctr">1</td><td class="ctr">0</td>
+                </tr>
+                <tr>
+                  <td>Unit-13</td>
+                  <td>0.6 TB</td><td>0.4 TB</td><td>0.3 TB</td><td>0.2 TB</td>
+                  <td class="migrated">0.4 TB</td>
+                  <td class="ctr await">1</td><td class="ctr">6</td><td class="ctr res">2</td><td class="ctr q">0</td><td class="ctr mig">0</td>
+                  <td class="ctr">4</td><td class="ctr">0</td><td class="ctr">0</td>
+                </tr>
               </tbody>
+              <tfoot>
+                <tr>
+                  <td>TOTAL</td>
+                  <td>38.4 TB</td><td>31.2 TB</td><td>22.7 TB</td><td>14.1 TB</td>
+                  <td class="migrated">12.6 TB</td>
+                  <td class="ctr">17</td><td class="ctr">231</td><td class="ctr res">223</td><td class="ctr q">14</td><td class="ctr mig">5</td>
+                  <td class="ctr">172</td><td class="ctr">7</td><td class="ctr">7</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
-
         </div>
-      </div>
 
-      <p style="margin-top:14px;color:var(--cp-text-muted);font-size:.86rem;text-align:center;">
-        Source: <code>New-MigrationDashboard.ps1</code> + <code>New-MigrationLandingPage.ps1</code> · published as a SharePoint Modern page in the same site as the driver list.
-      </p>
+      </div>
 
     </div>
 
