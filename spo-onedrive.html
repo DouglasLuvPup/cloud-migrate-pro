@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<title>Cloud Migrate Pro — SPO / OneDrive</title>
+
+<script>
+
+  (() => {
+
+    const param = new URLSearchParams(window.location.search).get("scoutTheme");
+
+    const theme = param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
+    document.documentElement.setAttribute("data-theme", theme);
+
+  })();
+
+</script>
+
+<style>
+
+:root{
+
+  color-scheme:light;
+
+  --cp-bg:#f4f7fb;--cp-bg-elevated:#fbfcfe;--cp-surface:#ffffff;--cp-surface-soft:#eef3f9;
+
+  --cp-border:#d8e1ec;--cp-text:#1a2330;--cp-text-muted:#516079;--cp-text-soft:#6b7890;
+
+  --cp-accent:#0f6cbd;--cp-accent-hover:#0a5599;--cp-accent-soft:rgba(15,108,189,.08);
+
+  --cp-accent-fg:#ffffff;--cp-success:#16a34a;--cp-warning:#f59e0b;--cp-danger:#dc2626;
+
+  --cp-shadow:0 18px 48px rgba(15,40,80,.14);--cp-highlight:rgba(15,108,189,.14);
+
+}
+
+html[data-theme="dark"]{
+
+  color-scheme:dark;
+
+  --cp-bg:#0f1822;--cp-bg-elevated:#15212e;--cp-surface:#1a2733;--cp-surface-soft:#1f2e3d;
+
+  --cp-border:#2c3e51;--cp-text:#e3ebf4;--cp-text-muted:#9fb1c6;--cp-text-soft:#b5c4d6;
+
+  --cp-accent:#54a8f0;--cp-accent-hover:#76bdf7;--cp-accent-soft:rgba(84,168,240,.16);
+
+  --cp-accent-fg:#08121c;--cp-success:#4ade80;--cp-warning:#fbbf24;--cp-danger:#f87171;
+
+  --cp-shadow:0 18px 48px rgba(0,0,0,.4);--cp-highlight:rgba(84,168,240,.16);
+
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+
+html{scroll-behavior:smooth;}
+
+body{font-family:"Segoe UI",Aptos,Calibri,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--cp-bg);color:var(--cp-text);line-height:1.55;overflow-x:hidden;}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px;}
+
+
+
+/* HERO */
+
+.hero{position:relative;padding:40px 0 72px;overflow:hidden;isolation:isolate;}
+
+.hero-bg{position:absolute;inset:-40% -20% auto -20%;height:170%;z-index:-2;background:
+
+ radial-gradient(42% 55% at 18% 22%,var(--cp-highlight) 0%,transparent 60%),
+
+ radial-gradient(38% 50% at 82% 18%,var(--cp-accent-soft) 0%,transparent 62%),
+
+ radial-gradient(50% 60% at 50% 100%,var(--cp-highlight) 0%,transparent 65%);
+
+ animation:drift 18s ease-in-out infinite alternate;}
+
+.hero::before{content:"";position:absolute;inset:0;z-index:-1;
+
+ background-image:linear-gradient(var(--cp-border) 1px,transparent 1px),linear-gradient(90deg,var(--cp-border) 1px,transparent 1px);
+
+ background-size:46px 46px;-webkit-mask-image:radial-gradient(ellipse 70% 60% at 50% 30%,#000 0%,transparent 75%);mask-image:radial-gradient(ellipse 70% 60% at 50% 30%,#000 0%,transparent 75%);opacity:.5;}
+
+@keyframes drift{0%{transform:translate3d(0,0,0) scale(1);}100%{transform:translate3d(0,-26px,0) scale(1.08);}}
+
+.orb{position:absolute;border-radius:50%;filter:blur(46px);opacity:.5;z-index:-1;background:radial-gradient(circle at 30% 30%,var(--cp-accent),transparent 70%);animation:float 12s ease-in-out infinite;}
+
+.orb.a{width:300px;height:300px;top:2%;right:5%;}
+
+.orb.b{width:220px;height:220px;bottom:-6%;left:1%;animation-delay:-5s;}
+
+@keyframes float{0%,100%{transform:translateY(0) translateX(0);}50%{transform:translateY(-30px) translateX(16px);}}
+
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--cp-accent);background:var(--cp-accent-soft);border:1px solid var(--cp-accent-soft);padding:7px 14px;border-radius:999px;margin-bottom:22px;animation:rise .7s both;}
+
+.pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--cp-accent);animation:pulse 2s infinite;}
+
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--cp-highlight);}70%{box-shadow:0 0 0 12px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
+
+h1.title{font-size:clamp(2.6rem,6vw,4.4rem);line-height:1.04;letter-spacing:-.02em;font-weight:800;margin-bottom:20px;animation:rise .7s .05s both;}
+
+.title .grad{background:linear-gradient(100deg,var(--cp-accent),var(--cp-accent-hover) 45%,var(--cp-text) 130%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;}
+
+.lede{font-size:clamp(1.05rem,2vw,1.3rem);color:var(--cp-text-muted);max-width:680px;margin-bottom:30px;animation:rise .7s .12s both;}
+
+@keyframes rise{from{opacity:0;transform:translateY(18px);}to{opacity:1;transform:translateY(0);}}
+
+.cta-row{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:34px;animation:rise .7s .18s both;}
+
+.btn{display:inline-flex;align-items:center;gap:10px;font-size:1rem;font-weight:600;font-family:inherit;padding:14px 26px;border-radius:.625rem;border:1px solid transparent;cursor:pointer;text-decoration:none;transition:transform .18s ease,box-shadow .18s ease,background .18s ease;}
+
+.btn-primary{background:var(--cp-accent);color:var(--cp-accent-fg);box-shadow:0 10px 26px var(--cp-highlight);}
+
+.btn-primary:hover{background:var(--cp-accent-hover);transform:translateY(-3px);}
+
+.btn-ghost{background:var(--cp-surface);color:var(--cp-text);border-color:var(--cp-border);}
+
+.btn-ghost:hover{transform:translateY(-3px);border-color:var(--cp-accent);color:var(--cp-accent);}
+
+.badges{display:flex;flex-wrap:wrap;gap:10px;animation:rise .7s .24s both;}
+
+.badge{display:inline-flex;align-items:center;gap:7px;font-size:.82rem;font-weight:600;padding:8px 14px;border-radius:999px;background:var(--cp-surface);border:1px solid var(--cp-border);color:var(--cp-text-muted);}
+
+.badge b{color:var(--cp-text);}
+
+
+
+/* SECTION */
+
+.section{padding:72px 0;}
+
+.section.alt{background:var(--cp-bg-elevated);border-top:1px solid var(--cp-border);border-bottom:1px solid var(--cp-border);}
+
+.section-head{text-align:center;max-width:720px;margin:0 auto 46px;}
+
+.section-head .kicker{font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--cp-accent);margin-bottom:12px;}
+
+.section-head h2{font-size:clamp(1.8rem,3.6vw,2.6rem);font-weight:800;letter-spacing:-.015em;margin-bottom:12px;}
+
+.section-head p{color:var(--cp-text-muted);font-size:1.06rem;}
+
+
+
+/* PLAYBOOK CARDS */
+
+.paths{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;align-items:stretch;}
+
+.path{position:relative;display:flex;flex-direction:column;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:18px;padding:30px 26px 28px;box-shadow:0 0 2px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.08);overflow:hidden;transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease;}
+
+.path::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,var(--cp-accent),transparent);transform:scaleX(0);transform-origin:left;transition:transform .3s ease;}
+
+.path:hover{transform:translateY(-8px);box-shadow:var(--cp-shadow);border-color:var(--cp-accent);}
+
+.path:hover::before{transform:scaleX(1);}
+
+.path .ico{width:56px;height:56px;border-radius:14px;display:grid;place-items:center;font-size:1.7rem;background:var(--cp-accent-soft);margin-bottom:18px;}
+
+.path .flow{font-size:.74rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--cp-accent);margin-bottom:8px;}
+
+.path h3{font-size:1.32rem;font-weight:750;margin-bottom:6px;line-height:1.2;}
+
+.path .route{font-size:.88rem;color:var(--cp-text-soft);font-family:Consolas,"Courier New",monospace;margin-bottom:22px;display:block;line-height:1.4;}
+
+.path ul{list-style:none;display:flex;flex-direction:column;gap:16px;margin-bottom:22px;}
+
+.path li{position:relative;padding-left:28px;font-size:.95rem;line-height:1.55;color:var(--cp-text-muted);}
+
+.path li b{color:var(--cp-text);font-weight:650;}
+
+.path li::before{content:"";position:absolute;left:0;top:6px;width:14px;height:14px;border-radius:4px;background:var(--cp-accent-soft);border:1.5px solid var(--cp-accent);}
+
+.path li::after{content:"";position:absolute;left:4.5px;top:9px;width:4px;height:7px;border:solid var(--cp-accent);border-width:0 2px 2px 0;transform:rotate(45deg);}
+
+.path .tags{margin-top:auto;display:flex;flex-wrap:wrap;gap:7px;}
+
+.path .tag{font-size:.74rem;font-weight:600;color:var(--cp-text-soft);background:var(--cp-surface-soft);border:1px solid var(--cp-border);padding:5px 10px;border-radius:999px;}
+
+
+
+/* CROSS-CUTTING */
+
+.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;}
+
+.feat{background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:16px;padding:28px 24px;transition:transform .2s ease,border-color .2s ease;}
+
+.feat:hover{transform:translateY(-5px);border-color:var(--cp-accent);}
+
+.feat .fi{font-size:1.7rem;margin-bottom:14px;}
+
+.feat h4{font-size:1.12rem;font-weight:700;margin-bottom:8px;}
+
+.feat p{font-size:.95rem;color:var(--cp-text-muted);}
+
+.feat p b{color:var(--cp-text);}
+
+code{font-family:Consolas,"Courier New",monospace;font-size:.86em;background:var(--cp-accent-soft);color:var(--cp-accent);padding:1px 6px;border-radius:5px;}
+
+.topnav{position:sticky;top:0;z-index:50;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);}
+
+.navwrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:12px;}
+
+.brand{display:inline-flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.01em;color:var(--cp-text);font-size:1.02rem;text-decoration:none;transition:opacity .15s;}
+
+.brand:hover{opacity:.82;}
+
+.brand .logo{width:34px;height:34px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 8px var(--cp-highlight);overflow:hidden;flex-shrink:0;}
+
+.brand .logo img{width:100%;height:100%;object-fit:cover;display:block;}
+
+.navlinks{display:flex;gap:6px;flex-wrap:wrap;}
+
+.navlinks a{font-size:.92rem;font-weight:600;color:var(--cp-text-muted);text-decoration:none;padding:8px 14px;border-radius:8px;transition:background .15s,color .15s;}
+
+.navlinks a:hover{background:var(--cp-accent-soft);color:var(--cp-accent);}
+
+.navlinks a.cta{background:var(--cp-accent);color:var(--cp-accent-fg);}
+
+.navlinks a.cta:hover{background:var(--cp-accent-hover);color:var(--cp-accent-fg);}
+
+@media (max-width:620px){.navlinks a{padding:7px 10px;font-size:.85rem;}.brand span{display:none;}}
+
+
+
+/* CHAT */
+
+.chat-shell{position:relative;background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:20px;padding:14px;box-shadow:var(--cp-shadow);max-width:900px;margin:0 auto;}
+
+.chat-shell::after{content:"";position:absolute;inset:-2px;border-radius:22px;z-index:-1;background:linear-gradient(120deg,var(--cp-accent),transparent 40%,var(--cp-accent-hover));opacity:.35;filter:blur(14px);animation:glow 6s ease-in-out infinite alternate;}
+
+@keyframes glow{from{opacity:.2;}to{opacity:.5;}}
+
+.chat-bar{display:flex;align-items:center;gap:10px;padding:8px 12px 14px;}
+
+.chat-bar .dots{display:flex;gap:6px;}
+
+.chat-bar .dots i{width:11px;height:11px;border-radius:50%;display:block;}
+
+.chat-bar .dots i:nth-child(1){background:var(--cp-danger);}
+
+.chat-bar .dots i:nth-child(2){background:var(--cp-warning);}
+
+.chat-bar .dots i:nth-child(3){background:var(--cp-success);}
+
+.chat-bar .label{font-size:.86rem;font-weight:600;color:var(--cp-text-muted);margin-left:4px;}
+
+.chat-bar .live{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-size:.76rem;font-weight:700;color:var(--cp-success);}
+
+.chat-bar .live .pulse-dot{background:var(--cp-success);}
+
+.chat-frame{width:100%;height:640px;border:0;border-radius:14px;background:var(--cp-bg-elevated);display:block;}
+
+
+
+footer{padding:44px 0 60px;text-align:center;color:var(--cp-text-soft);font-size:.88rem;}
+
+footer .v{color:var(--cp-text-muted);}
+
+
+
+@media (max-width:880px){.paths{grid-template-columns:1fr;}.feat-grid{grid-template-columns:1fr;}}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto;}}
+
+</style>
+
+</head>
+
+<body>
+
+
+
+<nav class="topnav" id="top">
+
+  <div class="wrap navwrap">
+
+    <a class="brand" href="index.html" aria-label="Cloud Migrate Pro home"><span class="logo"><img src="cloud-migrate-pro-logo-icon-192.png" alt=""></span><span>Cloud Migrate Pro</span></a>
+
+    <div class="navlinks">
+      <a href="index.html">← Home</a>
+      <a href="spo-onedrive.html" aria-current="page" style="color:var(--cp-text);font-weight:700;">SPO / OneDrive</a>
+      <a href="exchange.html">Exchange</a>
+      <a href="#paths">Playbooks</a>
+      <a href="diagrams.html">Diagrams</a>
+      <a href="scripts.html">Scripts</a>
+      <a href="mockups.html">Mockups</a>
+      <a class="cta" href="#concierge">🤖 AI Concierge</a>
+    </div>
+
+  </div>
+
+</nav>
+
+
+
+<header class="hero">
+
+  <div class="hero-bg"></div>
+
+  <div class="orb a"></div>
+
+  <div class="orb b"></div>
+
+  <div class="wrap">
+
+    <span class="eyebrow"><span class="pulse-dot"></span> AI · Powered by Microsoft Copilot Studio, GitHub Copilot in VS Code, and Microsoft Scout</span>
+
+    <h1 class="title">An AI guide to scaled, automated migration of your content to<br><span class="grad">SharePoint Online &amp; OneDrive.</span></h1>
+
+    <p class="lede">Three production migration playbooks — already built, already running in commercial, GCC-High (IL5), and sovereign (IL6). The AI Concierge is a <strong>navigator</strong> for those playbooks: tell it what content you're moving — on-prem SharePoint libraries, network home drives, or shared file drives — and it picks the right playbook, walks you through that playbook's workflow step-by-step, explains key parameters and gotchas, and points you to the canonical scripts in the repo. It does not generate scripts, run migrations, or replace the playbook itself — it makes the existing work findable and explainable. <em>Content migration only — no site collection structure, no IA rebuilds.</em></p>
+
+    <div class="cta-row">
+
+      <a class="btn btn-primary" href="#concierge">💬 Talk to the AI Concierge</a>
+
+      <a class="btn btn-ghost" href="scripts.html">📜 View the scripts</a>
+
+      <a class="btn btn-ghost" href="diagrams.html">📊 View the diagrams</a>
+
+      <a class="btn btn-ghost" href="mockups.html">🗂️ See a mockup</a>
+
+      <a class="btn btn-ghost" href="#paths">Explore the scenarios ↓</a>
+
+    </div>
+
+    <div class="badges">
+
+      <span class="badge">🤖 <b>Conversational AI</b> over real scripts</span>
+
+      <span class="badge">📜 <b>Battle-tested</b> PowerShell</span>
+
+      <span class="badge">🛡️ <b>IL5 + IL6</b> native</span>
+
+      <span class="badge">💸 <b>$0</b> added license cost</span>
+
+    </div>
+
+  </div>
+
+</header>
+
+
+
+<section class="section" id="concierge">
+
+  <div class="wrap">
+
+    <div class="section-head">
+
+      <div class="kicker">Live AI Concierge</div>
+
+      <h2>Engage Copilot as your guide to the entire migration suite</h2>
+
+      <p>Describe what you're moving and Copilot will pick the right playbook, walk you through it, explain every parameter and gotcha, and point you to the exact script — all grounded in the real repo. Try <b>“help me decide.”</b></p>
+
+    </div>
+
+    <div class="chat-shell">
+
+      <div class="chat-bar">
+
+        <span class="dots"><i></i><i></i><i></i></span>
+
+        <span class="label">Cloud Migrate Pro AI Concierge</span>
+
+        <span class="live"><span class="pulse-dot"></span> Live</span>
+
+      </div>
+
+      <iframe class="chat-frame" title="Cloud Migrate Pro Concierge"
+
+        src="https://copilotstudio.microsoft.com/environments/89e4745f-bb2a-eb7b-ab1b-ca02b2e5e604/bots/crcce_CloudMigrateProConcierge/webchat?__version__=2"
+
+        allow="microphone; clipboard-write"></iframe>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<section class="section alt" id="paths">
+
+  <div class="wrap">
+
+    <div class="section-head">
+
+      <div class="kicker">Three Playbooks</div>
+
+      <h2>Pick your migration scenario</h2>
+
+      <p>Each playbook is purpose-built for one source-to-destination pattern — with its own scripts, guardrails, and unique capabilities. The Concierge confirms your scenario in one question, then hands you to the specialist that owns it.</p>
+
+    </div>
+
+    <div class="paths">
+
+
+
+      <article class="path">
+
+        <div class="ico">🏢</div>
+
+        <h3>On-Prem → SharePoint Online</h3>
+
+        <span class="route">on-prem SharePoint Server &amp; MySites → SPO + OneDrive</span>
+
+        <ul>
+
+          <li><b>Two flows in one playbook</b> — MySite → OneDrive (with full AD &amp; SCA cutover) and on-prem site → SPO site (content-only). Version history is preserved end-to-end and a configurable extension blocklist screens out risky file types.</li>
+
+          <li><b>List-controlled, multi-runner safe</b> — driven by a customer-owned SPO list; only rows the operator marks <i>Migrate</i> are picked up, and a per-row lock plus server-name stamp lets several servers run side-by-side without ever double-processing an item.</li>
+
+          <li><b>SCA swap + AD cutover</b> — promotes the migration service account to Site Collection Admin on the source MySite and demotes the user, redirects <i>wwwHomePage</i> to the new OneDrive URL, removes legacy redirection / OneDrive security groups, and adds the target Office 365 group.</li>
+
+          <li><b>Audit trail + user notifications</b> — every row gets <i>DateStarted</i>, <i>DateMigrated</i>, log path, and a final status (<i>Migrated</i> / <i>ErrorLog</i> / <i>Failed</i>); the SPMT failure summary is attached to the row, and a Power Automate flow emails the affected user automatically when errors are logged.</li>
+
+        </ul>
+
+        <div class="tags"><span class="tag">SP Server</span><span class="tag">MySites</span><span class="tag">OD2OD + SP2SPO</span></div>
+
+      </article>
+
+
+
+      <article class="path">
+
+        <div class="ico">🏠</div>
+
+        <h3>H: Drive → OneDrive</h3>
+
+        <span class="route">UNC \\server\users\&lt;sam&gt; → OneDrive /Documents/HDrive</span>
+
+        <ul>
+
+          <li><b>OneDrive auto-provisioning</b> — resolves SAM → UPN → OneDrive URL and provisions the personal site with retry &amp; backoff, then grants the dedicated migration service account site-collection admin so SPMT can write.</li>
+
+          <li><b>AD-aware cutover</b> — stamps <i>wwwHomePage</i> to the new OneDrive URL and removes the user from every group listed on the row's redirection field (multi-group, comma- or newline-separated); license-group membership is validated up front so unlicensed users are skipped automatically.</li>
+
+          <li><b>Postpone-by-date &amp; throttle-aware</b> — operators can defer any user by date (multiple field-name spellings accepted), credentials are DPAPI-cached, and SPO 429 / 503 throttling triggers exponential backoff at every layer.</li>
+
+          <li><b>Source lockdown, reorg, and full audit</b> — a stage pre-pass copies content with no AD changes, the H: source is flipped read-only in a background job, <i>/My Documents</i> is flattened into <i>/Documents</i>, <code>.pst</code> is blocked, and per-item logs plus failure / fatal-error reports are attached to each SPO row for sign-off.</li>
+
+        </ul>
+
+        <div class="tags"><span class="tag">Per-user</span><span class="tag">AD-integrated</span><span class="tag">Hdrive script v5.2</span></div>
+
+      </article>
+
+
+
+      <article class="path">
+
+        <div class="ico">📁</div>
+
+        <h3>Common Drive → Teams / SharePoint</h3>
+
+        <span class="route">UNC shared drives → Teams channel folder or SPO site</span>
+
+        <ul>
+
+          <li><b>Two target flows</b> — Flow A resolves a Team + Channel to its SPO URL via Graph (app-only), pre-grants Group Owner + Site Collection Admin, and stamps storage quota / used / available so the engine knows the row will fit before it runs. Flow B targets a SharePoint site directly.</li>
+
+          <li><b>Storage auto-downgrade</b> — a parallel single-pass UNC scan sizes 3 / 5 / 7-year footprints, then auto-trims the migration horizon (7 → 5 → 3 years) to fit the destination quota with a safety buffer; the chosen horizon is stamped on the row.</li>
+
+          <li><b>Timezone-aware scheduling</b> — per-row windows block daytime business hours and allow nights, weekends, and US federal holidays in the row's local time; large rows (≥ 10 GB) are held to weekends/holidays unless explicitly opted into extended hours.</li>
+
+          <li><b>6+ server scale, post-migration cleanup, and reporting</b> — atomic multi-server claim locking with stale-release across scan, target, and migrate; ACLs are flipped to read-only and the source is deleted with a per-row deletion report; an HTML pipeline dashboard summarises progress by division for leadership.</li>
+
+        </ul>
+
+        <div class="tags"><span class="tag">Flow A</span><span class="tag">Flow B</span><span class="tag">CommonDriveMigration.v2</span></div>
+
+      </article>
+
+
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<section class="section">
+
+  <div class="wrap">
+
+    <div class="section-head">
+
+      <div class="kicker">Built In, Across Every Playbook</div>
+
+      <h2>Designed for regulated environments</h2>
+
+      <p>These are the foundations every playbook shares — the reasons they're trusted in the most regulated environments in the world.</p>
+
+    </div>
+
+    <div class="feat-grid">
+
+      <div class="feat">
+
+        <div class="fi">🌐</div>
+
+        <h4>One codebase, every Microsoft cloud</h4>
+
+        <p>The same scripts run unchanged in <b>IL5</b>, <b>IL6</b>, and <b>commercial Microsoft 365</b>. Built first for the most regulated environments and deployable in any tenant on any cloud Microsoft sells — without forks, without rewrites, without separate "federal" and "commercial" editions to maintain.</p>
+
+      </div>
+
+      <div class="feat">
+
+        <div class="fi">🔐</div>
+
+        <h4>Every action audited, every step logged</h4>
+
+        <p>Every script run writes a transcript to disk. Every row in the migration list captures <b>start time, end time, log path, and final status</b>. Per-file CSV reports attach directly to the row that produced them. Live <b>HTML dashboards in SharePoint Online</b> surface progress, errors, and per-division pipelines for leadership review — no separate reporting tool, no exports to chase, no vendor portal in the path.</p>
+
+      </div>
+
+      <div class="feat">
+
+        <div class="fi">💸</div>
+
+        <h4>Zero added license cost</h4>
+
+        <p>The migration engine is the <b>Microsoft SharePoint Migration Tool (SPMT)</b> — Microsoft-supported and already approved in your tenant. Orchestration runs on <b>PowerShell</b>, all state lives in <b>SharePoint Online</b> lists you already own, all logs land on disk you already have. <b>Every component is part of your existing Microsoft 365 entitlement</b> — no per-seat fees, no per-GB fees, no third-party SaaS to license, contract, or get re-approved.</p>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<footer>
+
+  <div class="wrap">
+
+    <p><b>Cloud Migrate Pro</b> · SPO / OneDrive <span class="v">v1.0 — June 2026</span></p>
+    <p>SharePoint · OneDrive · Common Drive migrations · IL5 / IL6 · Commercial-ready</p>
+
+  </div>
+
+</footer>
+
+
+
+</body>
+
+</html>
+
