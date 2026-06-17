@@ -98,6 +98,8 @@ footer{padding:44px 0 60px;text-align:center;color:var(--cp-text-soft);font-size
 footer a{color:var(--cp-text-muted);}
 @media (max-width:640px){.scripts{grid-template-columns:1fr;}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto;}}
+
+.scard .smeta{font-size:.73rem;color:var(--cp-text-muted);font-family:ui-monospace,Consolas,monospace;letter-spacing:.01em;padding:2px 0 4px;border-top:1px solid var(--cp-border);margin-top:6px;}
 </style>
 
 <!-- Prism.js (loaded once; modal triggers re-highlight) -->
@@ -142,6 +144,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Main migration</span>
         <div class="fname">Migration-OD2OD-SPO09132024.ps1</div>
         <div class="stats"><span class="stat">392 lines</span><span class="stat">22 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>On-prem MySite → OneDrive Online. Per-row claim-and-lock against an SPO control list, SPMT execution, then SCA swap on the source MySite, AD <code>wwwHomePage</code> redirect, removal of legacy redirection groups, and addition of the target O365 group.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/onprem/Migration-OD2OD-SPO09132024.ps1" download>Download</a></div>
       </div>
@@ -149,6 +152,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Main migration</span>
         <div class="fname">Migration-SP2SPO09132024.ps1</div>
         <div class="stats"><span class="stat">208 lines</span><span class="stat">12 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>On-prem SharePoint site → SPO site. <b>Content only</b> — moves document libraries and their version history. Does not migrate IA, web parts, navigation, permissions inheritance, or look-and-feel. 120-second pause between rows.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/onprem/Migration-SP2SPO09132024.ps1" download>Download</a></div>
       </div>
@@ -167,6 +171,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Main migration</span>
         <div class="fname">Hdrive-OneDriveScript081825a.ps1</div>
         <div class="stats"><span class="stat">3,461 lines</span><span class="stat">157 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>End-to-end H: drive cutover. ADDs the user to <code>SecFltr-USR-Office365</code> (governing OneDrive provisioning), VALIDATEs <code>O365S-AddOn-License</code> membership, sets two SCAs on the target OneDrive, runs SPMT against <code>\\&lt;server&gt;\users\&lt;sam&gt;</code>, then applies the redirection cleanup.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/hdrive/Hdrive-OneDriveScript081825a.ps1" download>Download</a></div>
       </div>
@@ -187,6 +192,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Main worker</span>
         <div class="fname">CommonDriveMigration.v2.ps1</div>
         <div class="stats"><span class="stat">4,865 lines</span><span class="stat">233 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>The core orchestrator. Reads the SPO control list, claims a row (host-stamped lock with 2-hour stale-claim recovery), launches SPMT against the UNC source, validates target counts, and on success flips the source folder to read-only via ACL rewrite (preserving admins and <code>svc-migration</code>).</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/CommonDriveMigration.v2.ps1" download>Download</a></div>
       </div>
@@ -194,6 +200,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Helper</span>
         <div class="fname">SPMT-Worker.v2.ps1</div>
         <div class="stats"><span class="stat">173 lines</span><span class="stat">6 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Lightweight SPMT runner invoked once per claimed row. Loads the SPMT module, registers a single migration, waits for completion, and returns the failure-summary path back to the main worker.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/SPMT-Worker.v2.ps1" download>Download</a></div>
       </div>
@@ -201,6 +208,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Pre-flight</span>
         <div class="fname">Update-MigrationTargets.v2.ps1</div>
         <div class="stats"><span class="stat">1,030 lines</span><span class="stat">46 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Walks every row in the control list and pre-grants <code>svc-migration@contoso.gov</code> Site Collection Admin on each target site. Eliminates the 1–24 hour SCA-propagation wait that would otherwise stall the worker.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/Update-MigrationTargets.v2.ps1" download>Download</a></div>
       </div>
@@ -208,6 +216,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Recovery</span>
         <div class="fname">Retry-FailedMigration.ps1</div>
         <div class="stats"><span class="stat">559 lines</span><span class="stat">21 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>After operator triage, re-queues rows whose status is <code>ErrorLog</code> or <code>Failed</code> back to <code>Migrate</code>. Resets the per-row lock fields so a fresh runner can pick the row up cleanly.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/Retry-FailedMigration.ps1" download>Download</a></div>
       </div>
@@ -219,6 +228,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Discovery</span>
         <div class="fname">Invoke-UNCStorageScan-v2.ps1</div>
         <div class="stats"><span class="stat">838 lines</span><span class="stat">42 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Pre-migration UNC inventory. Walks the source share, captures size, item count, file-type distribution, oldest/newest timestamps, and unsupported-character flags. Output drives the wave-planning conversation.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/Invoke-UNCStorageScan-v2.ps1" download>Download</a></div>
       </div>
@@ -226,6 +236,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Bulk load</span>
         <div class="fname">Import-MigrationSources.ps1</div>
         <div class="stats"><span class="stat">515 lines</span><span class="stat">20 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Bulk-imports the SPO control list from a CSV of UNC paths and target site URLs. Handles dedup, target-URL validation, and column initialization for the lock/status fields the worker reads.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/Import-MigrationSources.ps1" download>Download</a></div>
       </div>
@@ -237,6 +248,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Operator UI</span>
         <div class="fname">New-MigrationDashboard.ps1</div>
         <div class="stats"><span class="stat">732 lines</span><span class="stat">35 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Generates the operator-facing status dashboard as a SharePoint modern page. Shows row counts by status, per-server load, claim ages, and recent failures.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/New-MigrationDashboard.ps1" download>Download</a></div>
       </div>
@@ -244,6 +256,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">End-user UI</span>
         <div class="fname">New-MigrationLandingPage.ps1</div>
         <div class="stats"><span class="stat">293 lines</span><span class="stat">14 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Per-target landing page placed on each migrated SPO/Teams site. Welcomes the team to their new home, links the user manual, and points back to the source UNC for the read-only legacy view.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/New-MigrationLandingPage.ps1" download>Download</a></div>
       </div>
@@ -251,6 +264,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">End-user UI</span>
         <div class="fname">New-MigrationUserManualPage-Simple.ps1</div>
         <div class="stats"><span class="stat">645 lines</span><span class="stat">33 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>The "where did my files go?" page end users land on. Plain-language map of legacy UNC paths to the new SPO/Teams locations, plus the OneDrive sync instructions.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/New-MigrationUserManualPage-Simple.ps1" download>Download</a></div>
       </div>
@@ -258,6 +272,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Runbook</span>
         <div class="fname">New-SystemDocumentationPage.ps1</div>
         <div class="stats"><span class="stat">916 lines</span><span class="stat">54 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>Generates the architecture/runbook page: 6 servers, 18 SPMT instances, 30 scheduled tasks, 36 app registrations, the service account, and the SPMT credential certificate.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/New-SystemDocumentationPage.ps1" download>Download</a></div>
       </div>
@@ -265,6 +280,7 @@ footer a{color:var(--cp-text-muted);}
         <span class="role">Wrapper</span>
         <div class="fname">Deploy-SystemDocumentation.ps1</div>
         <div class="stats"><span class="stat">397 lines</span><span class="stat">19 KB</span></div>
+        <div class="smeta">— &middot; — &middot; —</div>
         <p>One-command deployment of the four <code>New-*Page</code> scripts above. Used when standing up a new operator workspace or refreshing documentation after a topology change.</p>
         <div class="row"><button class="view">View</button><a class="dl" href="scripts/commondrive/Deploy-SystemDocumentation.ps1" download>Download</a></div>
       </div>
